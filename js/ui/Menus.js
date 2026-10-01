@@ -58,6 +58,21 @@ export class Menus {
     bindSlider('set-sens', 'sensitivity', (v) => v.toFixed(2));
     bindSlider('set-fov', 'fov', (v) => `${Math.round(v)}°`);
     bindSlider('set-vol', 'volume', (v) => `${Math.round(v * 100)}%`, (v) => g.audio.setVolume(v));
+
+    // 무전·외침 음성 (TTS, 기본 꺼짐)
+    const sp = $('set-speech');
+    sp.checked = !!S.speech;
+    sp.addEventListener('change', () => {
+      S.speech = sp.checked;
+      S.save();
+      if (g.voice) g.voice.setSpeech(S.speech);
+      this.updateSpeechNote();
+    });
+  }
+
+  updateSpeechNote() {
+    const v = this.game.voice;
+    $('set-speech-note').textContent = v && !v.speechAvailable ? '(한국어 음성 없음 — 자막만 표시)' : '';
   }
 
   show(name) {
@@ -94,9 +109,13 @@ export class Menus {
     $('pause-note').textContent = text;
   }
 
+  /**
+   * @param r 결과 (ScoreSystem.result + accuracy + 오인 사격 통계 + reason)
+   */
   showResult(r, updated, records) {
+    const bad = (n) => n > 0;
     const rows = [
-      ['점수', r.score.toLocaleString('ko-KR'), updated.score],
+      ['점수', r.score.toLocaleString('ko-KR'), updated.score, r.score < 0],
       ['사살', `${r.kills}명`, updated.kills],
       ['헤드샷 비율', `${Math.round(r.headshotRatio * 100)}%`, false],
       ['분당 사살', r.kpm.toFixed(1), false],
@@ -104,12 +123,22 @@ export class Menus {
       ['생존 시간', fmtTime(r.time), updated.time],
       ['즉응 사살', `${r.quickKills}회`, false],
       ['명중률', `${Math.round(r.accuracy * 100)}%`, false],
+      ['아군 피격 / 사살', `${r.allyHits} / ${r.allyKills}`, false, bad(r.allyHits + r.allyKills)],
+      ['민간인 피격 / 사살', `${r.civHits} / ${r.civKills}`, false, bad(r.civHits + r.civKills)],
+      ['대피한 민간인', `${r.evacuated}명`, false],
+      ['어시스트', `${r.assists}회`, false],
+      ['오인 사격 감점', r.penaltyTotal.toLocaleString('ko-KR'), false, r.penaltyTotal < 0],
+      ['경고', `${r.warnings}/${CONFIG.penalty.maxWarnings}`, false, r.warnings > 0],
     ];
     $('result-stats').innerHTML = rows
-      .map(([k, v, best]) => `<div class="row"><span>${k}</span><b>${v}${best ? ' <em>신기록</em>' : ''}</b></div>`)
+      .map(([k, v, best, isBad]) => `<div class="row${isBad ? ' bad' : ''}"><span>${k}</span><b>${v}${best ? ' <em>신기록</em>' : ''}</b></div>`)
       .join('');
     $('result-best').innerHTML = `최고 기록 — 점수 <b>${records.bestScore.toLocaleString('ko-KR')}</b> · 사살 <b>${records.bestKills}</b> · 생존 <b>${fmtTime(records.bestTime)}</b> · 콤보 <b>${records.bestCombo}연속</b>`;
-    $('result-title').textContent = updated.score ? '신기록 달성' : '전사';
+    const dismissed = r.reason === 'dismissed';
+    $('result-title').textContent = dismissed ? '작전 해임' : updated.score ? '신기록 달성 — 전사' : '전사';
+    $('result-reason').textContent = dismissed
+      ? `오인 사격 경고 ${r.warnings}회 누적으로 작전에서 해임되었습니다.`
+      : '적의 총격에 쓰러졌습니다.';
     this.show('result');
   }
 }

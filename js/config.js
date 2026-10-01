@@ -4,7 +4,7 @@
 // 단위: 거리 m, 시간 초, 각도는 별도 표기가 없으면 '도(deg)'
 
 export const CONFIG = {
-  version: '0.1.0 (1단계: 핵심 사격 루프)',
+  version: '0.2.0 (2단계: 피아 혼재·오인 사격)',
 
   // ------------------------------------------------------------------
   // 키 설정 (KeyboardEvent.code 기준 — 한글 IME 상태와 무관하게 동작)
@@ -22,7 +22,7 @@ export const CONFIG = {
     flashlight: ['KeyF'],
     debug: ['Backquote'],
   },
-  // 이후 단계(관찰·대화)용으로 비워 둔 키 — 지금은 어떤 기능에도 묶지 않음
+  // 이후 단계(관찰·대화)용으로 비워 둔 키 — 2단계에서도 어떤 기능에도 묶지 않음
   reservedKeys: {
     interact: ['KeyE'], // 4단계: 말 걸기
     observe: ['KeyQ'], // 3단계: 관찰 모드
@@ -161,9 +161,16 @@ export const CONFIG = {
   factions: {
     enemy: { label: '적군', insignia: { color: 0xff1a12, shape: 'band' }, uniform: 0x59603f, vest: 0x3d4130 },
     ally: { label: '아군', insignia: { color: 0x1f6dff, shape: 'band' }, uniform: 0x5b6142, vest: 0x3e4231 },
-    civilian: { label: '민간인', insignia: null, uniform: null, vest: null },
+    civilian: { label: '민간인', insignia: null, uniform: null, vest: null }, // 사복 — 복장은 npc/Outfits.js 에서 무작위 조합
   },
   insignia: { emissive: 1.35, armbandHeight: 0.13, helmetBandHeight: 0.07 },
+
+  // 장비 세트 — 진짜 적·아군은 항상 자기 진영 세트를 일관되게 갖춘다 (3단계 위장 판별의 기준)
+  // 먼 거리에선 거의 구분되지 않고 가까이서만 보이는 차이
+  gearSets: {
+    enemy: { helmetStyle: 'enemy', rifleStyle: 'curved', footwear: 'combat' }, // 챙 있는 둥근 헬멧, 굽은 탄창·나무 개머리판
+    ally: { helmetStyle: 'ally', rifleStyle: 'straight', footwear: 'combat' }, // 낮고 넓은 헬멧(뒷목 가리개), 직선 탄창·검은 개머리판
+  },
 
   // ------------------------------------------------------------------
   // 적군 유형
@@ -197,9 +204,97 @@ export const CONFIG = {
       movingShooterFactor: 0.65,
       max: 0.85,
     },
+    accuracyVsNpc: 0.75, // 적이 아군 NPC 를 쏠 때 명중률 배율
+    damageVsNpcMul: 1.5, // 적이 아군 NPC 에게 주는 피해 배율
+    yieldRadius: 0.75, // 앞에 다른 NPC 가 있으면 감속 (겹쳐 지나가지 않게)
     coverPeek: [0.9, 2.2], // 엄폐 상태에서 숨어있는 시간
     aggressionTime: [14, 24], // 이 시간 이상 교착되면 우회/돌격 고려
     whizRadius: 2.2,
+  },
+
+  // ------------------------------------------------------------------
+  // 아군 — 파란 표식, 2~4명 분대, 보조 역할(낮은 명중률의 제압 사격)
+  // ------------------------------------------------------------------
+  ally: {
+    maxActive: 6,
+    squadSize: [2, 4],
+    health: 120, // 머리 1발(30×3.6)로는 죽지 않음 — 빗나간 한 발엔 멈출 기회가 있게
+    walk: 1.8,
+    run: 4.4,
+    accuracy: 0.12, // 낮게 — 적 처치의 주인공은 플레이어
+    damage: 22, // 1발 피해 (부위 배율은 weapon.zoneMultiplier)
+    headChance: 0.06,
+    burst: [3, 6],
+    burstPause: [0.55, 1.2],
+    magSize: 30,
+    reloadTime: 2.6,
+    sightRange: 60,
+    sightFov: 150,
+    perceptionInterval: [0.2, 0.32],
+    reaction: [0.4, 0.75],
+    suppressRadius: 1.8, // 이 거리 안으로 지나간 아군 탄은 적을 숨게 만듦
+    objectiveInterval: [6, 11], // 분대 목표 재평가 주기
+    advanceStopDist: [14, 24], // 적과 이 거리에서 멈춰 엄폐
+    clearChance: 0.3, // 적이 없을 때 근처 건물 실내 소탕 확률
+    regroupDist: [7, 14], // 적이 없으면 플레이어 근처로
+    sightLine: { width: 0.8, holdTime: 0.45, crossChance: 0.25, cooldown: 2.5 }, // 사선 회피
+    calloutCooldown: 6, // 같은 분대 콜아웃 최소 간격
+    initialSquad: true, // 시작 직후 플레이어 근처에 분대 하나
+    // 분대 교대: 이 시간이 지나고 교전이 잠잠하면 다른 구역으로 이동(화면 밖에서 퇴장) → 새 증원 분대가 들어올 자리
+    tour: [55, 95],
+    minTour: 35, // 증원 대기 중이면 이 시간 이후 교대 앞당김
+    withdrawQuiet: 8, // 마지막 교전 후 이만큼 조용해야 이동
+    withdrawDist: [32, 60], // 이동 목표 (플레이어로부터)
+    leaveDist: 24, // 플레이어 화면 밖 + 이 거리 이상이면 퇴장
+  },
+
+  // ------------------------------------------------------------------
+  // 민간인 — 표식 없는 사복, 비무장
+  // ------------------------------------------------------------------
+  civilian: {
+    maxActive: 10,
+    health: 50,
+    walk: 1.4,
+    run: 4.0,
+    elderChance: 0.3,
+    elderSpeedMul: 0.6,
+    hearRadius: 24, // 이 안의 총성에 웅크림·비명
+    cowerTime: [2.0, 4.5],
+    calmBeforeFlee: [3.0, 6.0], // 마지막 총성 뒤 이만큼 조용해야 대피 시작
+    fleeCheck: [1.2, 3.0],
+    fleeChance: 0.35,
+    lullFleeMul: 2.5, // 소강 구간엔 대피 이동 증가
+    aimReactDist: 24, // 플레이어가 이 거리 안에서 조준하면 손을 듦
+    aimReactTime: 0.25,
+    handsUpRelease: 1.3,
+    shoutCooldown: 6,
+    panicRadius: 35, // 민간인 사망 시 이 안의 민간인이 흩어져 도망
+    panicTime: 20,
+    initialCount: [3, 5], // 시작 시 건물·차량 뒤에 숨어 있는 민간인
+    evacEdgeDist: 13, // 맵 가장자리에서 이 거리 안의 도로·골목 노드가 대피 지점
+  },
+
+  // ------------------------------------------------------------------
+  // 오인 사격 페널티 — 판정은 피해자의 trueFaction 기준
+  // ------------------------------------------------------------------
+  penalty: {
+    allyHit: -200,
+    allyKill: -1000,
+    allyKillComboLock: 10, // 초
+    allyKillRadioMute: 30, // 초 — 아군 무전 콜아웃 중단
+    civHit: -300,
+    civKill: -1500,
+    civKillComboLock: 15,
+    maxWarnings: 3, // 누적 시 작전 해임 (게임 오버)
+  },
+
+  // 자막·음성
+  voice: {
+    maxLines: 3,
+    baseDuration: 1.7,
+    perChar: 0.06,
+    dedupeWindow: 3,
+    speechVolume: 1,
   },
 
   // ------------------------------------------------------------------
@@ -245,6 +340,20 @@ export const CONFIG = {
     intensityDecay: 0.045, // 초당 긴장도 감소
     intensityHigh: 0.85, // 이 이상이면 일찍 소강으로
     groupSpreadDeg: 70, // 습격 시 그룹 간 최소 방위각 차
+    // 출현 비율 (적:아군:민간인). 적 출현 1회마다 아군·민간인 '출현 크레딧'이 비율대로 쌓인다
+    mix: { enemy: 65, ally: 15, civilian: 20 },
+    assaultAllyMul: 2.0, // 습격 구간엔 아군 증원 확률 증가
+    mixNearEnemyChance: [0.15, 0.6], // 위협 단계 1 → 최고: 아군·민간인이 교전 중인 적 근처에 나타날 확률
+    // 돌발 조우 — 근거리 출입구·모퉁이에서 갑자기 등장 (판단 시험 구간)
+    ambush: {
+      interval: [38, 70],
+      intervalAtMax: [20, 38],
+      firstAfter: 25,
+      minDist: 3.5,
+      maxDist: 8,
+      mix: { enemy: 50, ally: 25, civilian: 25 },
+      cueLead: [0.25, 0.5],
+    },
   },
 
   // ------------------------------------------------------------------
@@ -261,6 +370,8 @@ export const CONFIG = {
     comboWindow: 5.0,
     comboStep: 0.5,
     comboMax: 4.0,
+    assist: 30, // 플레이어가 먼저 맞힌 적을 아군이 마무리
+    evacuation: 25, // 민간인 대피 성공
   },
 
   audio: {
@@ -270,7 +381,7 @@ export const CONFIG = {
   },
 
   // 기본 설정값 (일시정지 메뉴에서 변경, localStorage 저장)
-  defaults: { sensitivity: 1.0, fov: 78, volume: 0.8 },
+  defaults: { sensitivity: 1.0, fov: 78, volume: 0.8, speech: false },
   limits: { sensitivity: [0.2, 3.0], fov: [60, 100], volume: [0, 1] },
 
   debug: { showNavGraph: false },

@@ -33,6 +33,7 @@ export class Settings {
     this.volume = clamp(Number(saved.volume ?? d.volume), L.volume);
     if (Number.isNaN(this.volume)) this.volume = d.volume;
     this.lastSeed = typeof saved.lastSeed === 'string' ? saved.lastSeed : null;
+    this.speech = typeof saved.speech === 'boolean' ? saved.speech : d.speech; // 무전·외침 음성(TTS)
   }
 
   save() {
@@ -41,6 +42,7 @@ export class Settings {
       fov: this.fov,
       volume: this.volume,
       lastSeed: this.lastSeed,
+      speech: this.speech,
     });
   }
 }
@@ -57,15 +59,17 @@ export class Records {
 
   // 결과를 반영하고 갱신된 항목을 돌려줌
   submit(result) {
+    // 작전 해임은 생존 시간 기록으로 치지 않음
+    const time = result.reason === 'dismissed' ? 0 : result.time;
     const updated = {
       score: result.score > this.bestScore,
       kills: result.kills > this.bestKills,
-      time: result.time > this.bestTime,
+      time: time > this.bestTime,
       combo: result.bestChain > this.bestCombo,
     };
     this.bestScore = Math.max(this.bestScore, result.score);
     this.bestKills = Math.max(this.bestKills, result.kills);
-    this.bestTime = Math.max(this.bestTime, result.time);
+    this.bestTime = Math.max(this.bestTime, time);
     this.bestCombo = Math.max(this.bestCombo, result.bestChain);
     this.games += 1;
     safeSave(RECORDS_KEY, {

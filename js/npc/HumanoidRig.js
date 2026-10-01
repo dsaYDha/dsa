@@ -52,59 +52,137 @@ function merge(list) {
   return m;
 }
 
-// 기본 복장 — 진영 정의(config.factions)에서 색을 받아 만든다
+// 기본 복장 — 진영 정의(config.factions)에서 색을 받아 만든다 (진영별 장비 세트는 npc/Outfits.js)
+// 복장 필드는 그대로 장비 데이터(npc.getEquipment)로 조회된다 — 3단계 시각 단서 판정 기준
 export function defaultOutfit(faction) {
   return {
-    uniform: faction.uniform ?? 0x5a5f42,
-    vest: faction.vest ?? 0x3d4130,
+    uniform: faction.uniform ?? 0x5a5f42, // 상의 색 (사복이면 상의 색)
+    vest: faction.vest ?? 0x3d4130, // null 이면 조끼 없음
     pants: faction.uniform ?? 0x5a5f42,
     skin: 0xb08066,
     boots: 0x1e1a16,
-    helmet: 0x434835,
-    gloves: 0x2a2620,
-    headwear: 'helmet', // 'helmet' | 'cap' | 'none'
+    helmet: 0x434835, // 머리 장비 색
+    gloves: 0x2a2620, // 손 색 (사복은 피부색)
+    hair: 0x2a1e16,
+    headwear: 'helmet', // 'helmet' | 'cap' | 'beanie' | 'hat' | 'none'
+    helmetStyle: 'enemy', // 'enemy'(챙 있는 둥근 헬멧) | 'ally'(낮고 넓은 헬멧 + 뒷목 가리개)
     rifle: true,
+    rifleStyle: 'curved', // 'curved'(굽은 탄창·나무 개머리판) | 'straight'(직선 탄창·검은 개머리판)
+    footwear: 'combat', // 'combat' | 'sneakers' | 'dress' | 'work'
+    top: 'uniform', // 'uniform' | 'shirt' | 'jacket' | 'coat' | 'sweater'
+    bag: null, // null | 'backpack' | 'shoulder' | 'carry'
+    bagColor: 0x3a3028,
+    elder: false,
   };
 }
 
 const geoCache = new Map();
 const skinCache = new Map();
 
+function headGeometry(o) {
+  const head = [box(0.19, 0.22, 0.21, o.skin, 0, 0.12, 0), box(0.16, 0.03, 0.02, 0x2a1e18, 0, 0.15, 0.106)];
+  if (o.headwear !== 'helmet') {
+    // 머리카락 (모자 아래로도 보임)
+    const hair = o.elder ? 0xa8a49c : o.hair;
+    head.push(box(0.2, 0.05, 0.22, hair, 0, 0.245, -0.005), box(0.2, 0.15, 0.04, hair, 0, 0.16, -0.1));
+  }
+  if (o.headwear === 'helmet') {
+    if (o.helmetStyle === 'ally') {
+      // 아군: 낮고 넓은 헬멧, 챙 없음, 뒷목 가리개 + 앞쪽 장착대
+      const hg = new THREE.SphereGeometry(0.145, 9, 5, 0, Math.PI * 2, 0, Math.PI / 2);
+      hg.scale(1.06, 0.72, 1.12);
+      hg.translate(0, 0.165, 0);
+      head.push(paint(hg, o.helmet));
+      head.push(box(0.24, 0.06, 0.05, o.helmet, 0, 0.15, -0.15, 0.25));
+      head.push(box(0.05, 0.04, 0.025, 0x1c1d1e, 0, 0.215, 0.155));
+    } else {
+      // 적: 둥근 헬멧 + 둘레 챙
+      const hg = new THREE.SphereGeometry(0.145, 9, 5, 0, Math.PI * 2, 0, Math.PI / 2);
+      hg.scale(1, 0.85, 1.08);
+      hg.translate(0, 0.17, 0);
+      head.push(paint(hg, o.helmet));
+      head.push(box(0.3, 0.02, 0.32, o.helmet, 0, 0.17, 0.0));
+    }
+  } else if (o.headwear === 'cap') {
+    head.push(box(0.21, 0.08, 0.23, o.helmet, 0, 0.25, 0), box(0.18, 0.02, 0.1, o.helmet, 0, 0.215, 0.14));
+  } else if (o.headwear === 'beanie') {
+    head.push(box(0.21, 0.11, 0.23, o.helmet, 0, 0.26, -0.005), box(0.215, 0.035, 0.235, o.helmet, 0, 0.215, -0.005));
+  } else if (o.headwear === 'hat') {
+    head.push(box(0.2, 0.1, 0.22, o.helmet, 0, 0.28, 0), box(0.34, 0.015, 0.36, o.helmet, 0, 0.235, 0));
+  }
+  return merge(head);
+}
+
+function rifleGeometry(style) {
+  if (style === 'straight') {
+    // 아군 소총: 직선 탄창, 검은 폴리머 개머리판·총열덮개, 상부 손잡이
+    return merge([
+      box(0.05, 0.075, 0.42, 0x232426, 0, 0, 0.05),
+      box(0.028, 0.04, 0.2, 0x18191a, 0, 0.058, 0.05),
+      box(0.022, 0.022, 0.38, 0x161718, 0, 0.012, 0.46),
+      box(0.036, 0.16, 0.06, 0x202122, 0, -0.11, 0.14, 0.05),
+      box(0.045, 0.075, 0.26, 0x1c1d1f, 0, -0.02, -0.26),
+      box(0.06, 0.06, 0.2, 0x26272a, 0, 0.0, 0.33),
+      box(0.034, 0.1, 0.045, 0x1c1d1f, 0, -0.07, -0.05, -0.3),
+    ]);
+  }
+  // 적 소총: 굽은 탄창, 나무 개머리판·총열덮개
+  return merge([
+    box(0.05, 0.075, 0.42, 0x25262a, 0, 0, 0.05),
+    box(0.024, 0.024, 0.36, 0x1a1b1d, 0, 0.012, 0.44),
+    box(0.04, 0.1, 0.07, 0x2a2b2e, 0, -0.08, 0.13, 0.15),
+    box(0.038, 0.1, 0.066, 0x2a2b2e, 0, -0.165, 0.175, 0.55),
+    box(0.045, 0.085, 0.25, 0x5a3c26, 0, -0.025, -0.26),
+    box(0.058, 0.058, 0.18, 0x5a3c26, 0, 0.0, 0.32),
+    box(0.034, 0.1, 0.045, 0x5a3c26, 0, -0.07, -0.05, -0.3),
+  ]);
+}
+
+function footGeometry(o) {
+  switch (o.footwear) {
+    case 'sneakers': // 운동화: 낮고 밝은 색 + 밑창
+      return [box(0.13, 0.07, 0.26, 0xd6d3cb, 0, -0.42, 0.05), box(0.135, 0.025, 0.265, o.boots, 0, -0.455, 0.05)];
+    case 'dress': // 구두: 낮고 어두운 광택
+      return [box(0.12, 0.065, 0.26, 0x23160f, 0, -0.425, 0.05)];
+    case 'work': // 작업화: 갈색
+      return [box(0.14, 0.1, 0.25, 0x5a3a22, 0, -0.42, 0.045)];
+    default: // 군화: 목이 긴 검은 군화
+      return [box(0.14, 0.12, 0.25, o.boots, 0, -0.43, 0.045), box(0.135, 0.1, 0.15, o.boots, 0, -0.33, 0)];
+  }
+}
+
 function buildGeometries(o) {
   const key = JSON.stringify(o);
   if (geoCache.has(key)) return geoCache.get(key);
   const G = {};
-  G.pelvis = merge([box(0.34, 0.2, 0.22, o.pants, 0, -0.02, 0), box(0.36, 0.05, 0.24, 0x2b2a24, 0, 0.07, 0)]);
+  const pelvis = [box(0.34, 0.2, 0.22, o.pants, 0, -0.02, 0), box(0.36, 0.05, 0.24, 0x2b2a24, 0, 0.07, 0)];
+  if (o.top === 'coat') pelvis.push(box(0.4, 0.34, 0.27, o.uniform, 0, -0.09, 0));
+  if (o.bag === 'shoulder') pelvis.push(box(0.08, 0.2, 0.24, o.bagColor, -0.22, 0.0, 0));
+  G.pelvis = merge(pelvis);
   const torso = [box(0.38, 0.5, 0.22, o.uniform, 0, 0.27, 0), box(0.1, 0.08, 0.1, o.skin, 0, 0.55, 0)];
   if (o.vest != null) {
     torso.push(box(0.42, 0.34, 0.28, o.vest, 0, 0.25, 0.005));
     torso.push(box(0.09, 0.1, 0.05, o.vest, -0.12, 0.14, 0.16), box(0.09, 0.1, 0.05, o.vest, 0, 0.14, 0.16), box(0.09, 0.1, 0.05, o.vest, 0.12, 0.14, 0.16));
     torso.push(box(0.3, 0.2, 0.08, o.vest, 0, 0.3, -0.18)); // 등 배낭
   }
-  G.torso = merge(torso);
-  const head = [box(0.19, 0.22, 0.21, o.skin, 0, 0.12, 0), box(0.16, 0.03, 0.02, 0x2a1e18, 0, 0.15, 0.106)];
-  if (o.headwear === 'helmet') {
-    const hg = new THREE.SphereGeometry(0.145, 9, 5, 0, Math.PI * 2, 0, Math.PI / 2);
-    hg.scale(1, 0.85, 1.08);
-    hg.translate(0, 0.17, 0);
-    head.push(paint(hg, o.helmet));
-    head.push(box(0.3, 0.02, 0.32, o.helmet, 0, 0.17, 0.0)); // 챙
-  } else if (o.headwear === 'cap') {
-    head.push(box(0.21, 0.08, 0.23, o.helmet, 0, 0.25, 0), box(0.18, 0.02, 0.1, o.helmet, 0, 0.215, 0.14));
+  if (o.top === 'jacket' || o.top === 'coat') {
+    torso.push(box(0.3, 0.06, 0.24, o.uniform, 0, 0.5, 0)); // 깃
+    torso.push(box(0.02, 0.44, 0.012, 0x1a1816, 0, 0.27, 0.112)); // 지퍼·여밈
+  } else if (o.top === 'sweater') {
+    torso.push(box(0.39, 0.05, 0.23, o.uniform, 0, 0.04, 0));
+  } else if (o.top === 'shirt') {
+    torso.push(box(0.16, 0.05, 0.02, 0xd8d2c4, 0, 0.5, 0.105)); // 칼라
   }
-  G.head = merge(head);
+  if (o.bag === 'backpack') torso.push(box(0.3, 0.34, 0.14, o.bagColor, 0, 0.26, -0.18));
+  if (o.bag === 'shoulder') torso.push(box(0.04, 0.62, 0.02, o.bagColor, 0, 0.26, 0.115, 0, 0, 0.62));
+  G.torso = merge(torso);
+  G.head = headGeometry(o);
   G.upperArm = merge([box(0.11, 0.3, 0.11, o.uniform, 0, -0.14, 0)]);
   G.forearm = merge([box(0.1, 0.26, 0.1, o.uniform, 0, -0.12, 0), box(0.08, 0.09, 0.08, o.gloves, 0, -0.29, 0)]);
   G.thigh = merge([box(0.15, 0.44, 0.16, o.pants, 0, -0.21, 0)]);
-  G.shin = merge([box(0.13, 0.4, 0.14, o.pants, 0, -0.2, 0), box(0.14, 0.12, 0.25, o.boots, 0, -0.43, 0.045)]);
-  G.rifle = merge([
-    box(0.05, 0.075, 0.42, 0x25262a, 0, 0, 0.05),
-    box(0.024, 0.024, 0.36, 0x1a1b1d, 0, 0.012, 0.44),
-    box(0.04, 0.15, 0.07, 0x2a2b2e, 0, -0.1, 0.12, 0.25),
-    box(0.045, 0.085, 0.25, 0x5a3c26, 0, -0.025, -0.26),
-    box(0.058, 0.058, 0.18, 0x5a3c26, 0, 0.0, 0.32),
-    box(0.034, 0.1, 0.045, 0x5a3c26, 0, -0.07, -0.05, -0.3),
-  ]);
+  G.shin = merge([box(0.13, 0.4, 0.14, o.pants, 0, -0.2, 0), ...footGeometry(o)]);
+  if (o.rifle) G.rifle = rifleGeometry(o.rifleStyle);
+  if (o.bag === 'carry') G.carry = merge([box(0.1, 0.24, 0.32, o.bagColor, 0, -0.47, 0.02), box(0.02, 0.08, 0.1, 0x1a1816, 0, -0.33, 0.02)]);
   geoCache.set(key, G);
   return G;
 }
@@ -243,6 +321,7 @@ export class HumanoidRig {
         { bone: 'kneeR', geo: G.shin, zone: 'leg' },
       ];
       if (this.outfit.rifle) parts.push({ bone: 'rifleMount', geo: G.rifle, zone: 'none' });
+      if (G.carry) parts.push({ bone: 'elbowR', geo: G.carry, zone: 'none' });
       geo = buildSkinnedGeometry(parts, this.restOffsets);
       skinCache.set(key, geo);
     }
@@ -292,12 +371,17 @@ export class HumanoidRig {
   }
 
   /**
-   * p: { speed, aim(0~1), aimPitch(rad), crouch(0~1), running(bool) }
+   * p: { speed, aim(0~1), aimPitch(rad), crouch(0~1), handsUp(0~1), cower(0~1) }
+   * 무장 여부는 복장(outfit.rifle), 노인 자세는 outfit.elder 로 결정
    */
   animate(dt, p) {
     const speed = p.speed || 0;
-    const aim = p.aim || 0;
+    const armed = !!this.outfit.rifle;
+    const aim = armed ? p.aim || 0 : 0;
     const crouch = p.crouch || 0;
+    const handsUp = p.handsUp || 0;
+    const cower = p.cower || 0;
+    const stoop = this.outfit.elder ? 1 : 0;
     this.kick = Math.max(0, this.kick - dt * 14);
     this.flinch = Math.max(0, this.flinch - dt * 4);
 
@@ -347,17 +431,45 @@ export class HumanoidRig {
     this.pelvis.rotation.y = speed > 0.1 ? s * 0.12 * amp * (1 - aim * 0.7) : 0;
 
     // 상체: 달릴 때 앞으로, 앉을 때 숙임, 조준 피치, 피격 움찔
-    const lean = run * 0.18 + crouch * 0.6 * (1 - aim * 0.55);
+    const lean = run * 0.18 + crouch * 0.6 * (1 - aim * 0.55) + stoop * 0.2 * (1 - handsUp);
     this.spine.rotation.set(lean - (p.aimPitch || 0) * aim - this.flinch * 0.45, -this.pelvis.rotation.y, this.flinch * 0.25 * this.flinchSide);
     this.neck.rotation.set(-this.flinch * 0.5 - lean * 0.4 + (p.aimPitch || 0) * aim * 0.1, 0, 0);
 
-    // 팔·소총: 조준 ↔ 휴대 자세
-    const swing = speed > 0.1 ? s * 0.35 * amp * (1 - aim) : 0;
+    // 팔: 무장(조준 ↔ 휴대) / 비무장(자연스러운 팔 흔들기, 짐 들기)
     // 오른팔(-x 쪽)은 +y 회전, 왼팔(+x 쪽)은 -y 회전이 안쪽
-    this.shoulderR.rotation.set(lerp(-0.45 + swing * 0.5, -0.95, aim), lerp(0.35, 0.55, aim), 0);
-    this.elbowR.rotation.set(lerp(-1.15, -0.7, aim), 0, 0);
-    this.shoulderL.rotation.set(lerp(-0.7 - swing * 0.5, -1.3, aim), lerp(-0.5, -0.62, aim), 0);
-    this.elbowL.rotation.set(lerp(-0.9, -0.22, aim), 0, 0);
+    let rX;
+    let rY;
+    let rZ;
+    let rE;
+    let lX;
+    let lY;
+    let lZ;
+    let lE;
+    if (armed) {
+      const swing = speed > 0.1 ? s * 0.35 * amp * (1 - aim) : 0;
+      rX = lerp(-0.45 + swing * 0.5, -0.95, aim); rY = lerp(0.35, 0.55, aim); rZ = 0; rE = lerp(-1.15, -0.7, aim);
+      lX = lerp(-0.7 - swing * 0.5, -1.3, aim); lY = lerp(-0.5, -0.62, aim); lZ = 0; lE = lerp(-0.9, -0.22, aim);
+    } else {
+      // 오른 다리가 앞으로 갈 때(-s) 오른팔은 뒤로(+)
+      const sw = speed > 0.1 ? s * (0.3 + run * 0.45) * Math.min(1, speed / 2.5 + 0.3) : 0;
+      rX = sw; rY = 0; rZ = -0.08; rE = -(0.15 + run * 1.0);
+      lX = -sw; lY = 0; lZ = 0.08; lE = -(0.15 + run * 1.0);
+      if (this.outfit.bag === 'carry') { rX = sw * 0.2; rZ = -0.16; rE = -0.05; }
+    }
+    // 손 들기 (항복·"쏘지 마세요")
+    if (handsUp > 0) {
+      rX = lerp(rX, -2.75, handsUp); rY = lerp(rY, 0, handsUp); rZ = lerp(rZ, -0.35, handsUp); rE = lerp(rE, -0.45, handsUp);
+      lX = lerp(lX, -2.75, handsUp); lY = lerp(lY, 0, handsUp); lZ = lerp(lZ, 0.35, handsUp); lE = lerp(lE, -0.45, handsUp);
+    }
+    // 머리 감싸고 웅크리기
+    if (cower > 0) {
+      rX = lerp(rX, -2.45, cower); rY = lerp(rY, 0.3, cower); rZ = lerp(rZ, -0.55, cower); rE = lerp(rE, -2.2, cower);
+      lX = lerp(lX, -2.45, cower); lY = lerp(lY, -0.3, cower); lZ = lerp(lZ, 0.55, cower); lE = lerp(lE, -2.2, cower);
+    }
+    this.shoulderR.rotation.set(rX, rY, rZ);
+    this.elbowR.rotation.set(rE, 0, 0);
+    this.shoulderL.rotation.set(lX, lY, lZ);
+    this.elbowL.rotation.set(lE, 0, 0);
     this.rifleMount.position.set(lerp(-0.02, -0.1, aim), lerp(0.22, 0.42, aim), lerp(0.24, 0.24, aim) - this.kick * 0.05);
     this.rifleMount.rotation.set(lerp(0.55, 0, aim) - this.kick * 0.12, lerp(0.25, 0, aim), lerp(0.5, 0, aim));
   }

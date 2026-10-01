@@ -49,7 +49,8 @@ export class Insignia {
     if (!rig) return;
     const s = this.shape;
     const helmet = rig.outfit.headwear === 'helmet';
-    const key = `${s}|${helmet}`;
+    const style = helmet ? rig.outfit.helmetStyle : 'none';
+    const key = `${s}|${style}`;
     let geo = cache.get(key);
     if (geo === undefined) {
       const I = CONFIG.insignia;
@@ -59,7 +60,11 @@ export class Insignia {
         parts.push({ bone: 'shoulderL', geo: arm, zone: 'arm' }, { bone: 'shoulderR', geo: arm, zone: 'arm' });
       }
       if (s === 'band' || s === 'helmet') {
-        const band = helmet ? ring(0.142, 0.156, I.helmetBandHeight, 0.205, 1.1) : ring(0.118, 0.118, I.helmetBandHeight * 0.8, 0.19, 1.1);
+        // 헬멧 모양에 맞춘 띠 (적·아군 같은 형태·두께, 헬멧이 없으면 머리띠)
+        let band;
+        if (style === 'ally') band = ring(0.138, 0.162, I.helmetBandHeight, 0.2, 1.07);
+        else if (helmet) band = ring(0.142, 0.156, I.helmetBandHeight, 0.205, 1.1);
+        else band = ring(0.118, 0.118, I.helmetBandHeight * 0.8, 0.19, 1.1);
         parts.push({ bone: 'neck', geo: band, zone: 'head' });
       }
       geo = parts.length ? buildSkinnedGeometry(parts, rig.restOffsets) : null;
@@ -97,6 +102,16 @@ export class Insignia {
     if (this.color == null) return;
     this.material.color.setHex(this.color);
     this.material.emissive.setHex(this.color);
+  }
+
+  // 장비 데이터 (3단계 시각 단서 판정용)
+  describe() {
+    const visible = !!(this.mesh && this.mesh.visible);
+    let colorName = null;
+    if (this.color === CONFIG.factions.enemy.insignia.color) colorName = 'red';
+    else if (this.color === CONFIG.factions.ally.insignia.color) colorName = 'blue';
+    else if (this.color != null) colorName = 'other';
+    return { visible, color: visible ? this.color : null, colorName: visible ? colorName : null, shape: visible ? this.shape : 'none' };
   }
 
   // 레이캐스트 대상 (보이는 것만)

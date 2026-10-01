@@ -1,5 +1,6 @@
 // HUD — 크로스헤어(탄퍼짐 반영), 히트/킬 마커, 점수 팝업, 체력·탄약·점수·사살·콤보 게이지·위협 단계·생존 시간·킬 로그,
-// 피격 비네트 + 방향 표시. 미니맵 없음 (적 위치는 눈과 귀로만)
+// 피격 비네트 + 방향 표시. 미니맵 없음 (적 위치는 눈과 귀, 아군 무전 콜아웃으로 파악)
+// 2단계: 경고 횟수, 콤보 잠금, 오인 사격 피드백(가장자리 플래시·전용 마커·중앙 경고), 나침반(콜아웃 방위용), 무전 자막 영역
 import * as THREE from 'three';
 import { CONFIG } from '../config.js';
 import { Events } from '../core/EventBus.js';
@@ -42,7 +43,26 @@ export class HUD {
       banner: $('banner'),
       hint: $('hud-hint'),
       weaponName: $('hud-weapon'),
+      ffFlash: $('ff-flash'),
+      ffMarker: $('ffmarker'),
+      ffWarning: $('ff-warning'),
+      warnPips: $('hud-warn-pips'),
+      warnText: $('hud-warn-text'),
+      warnings: $('hud-warnings'),
+      comboLock: $('hud-combo-lock'),
+      comboLockT: $('hud-combo-lock-t'),
+      compass: $('compass-strip'),
     };
+    // 나침반 눈금 (15도 간격, 8방위 라벨)
+    this.compassMarks = [];
+    const names = { 0: '북', 45: '북동', 90: '동', 135: '남동', 180: '남', 225: '남서', 270: '서', 315: '북서' };
+    for (let a = 0; a < 360; a += 15) {
+      const span = document.createElement('span');
+      span.textContent = names[a] ?? '·';
+      span.className = names[a] ? (a % 90 === 0 ? 'major' : '') : 'tick';
+      this.el.compass.appendChild(span);
+      this.compassMarks.push({ a, span });
+    }
     this.el.weaponName.textContent = CONFIG.weapon.name;
     this.hitT = 0;
     this.killT = 0;
@@ -52,26 +72,78 @@ export class HUD {
     this._last = {};
 
     const ev = game.events;
+    // 적 명중·사살 마커 (아군·민간인은 오인 사격 전용 피드백)
     ev.on(Events.NPC_DAMAGED, (e) => {
-      if (e.attacker !== 'player') return;
+      if (e.attacker !== 'player' || e.trueFaction !== 'enemy') return;
       this.showHit(e.headshot);
       game.audio.hitMarker(e.headshot);
     });
     ev.on(Events.NPC_KILLED, (e) => {
-      if (e.attacker !== 'player') return;
-      this.showKill();
-      game.audio.kill(e.headshot);
+      if (e.attacker === 'player' && e.trueFaction === 'enemy') {
+        this.showKill();
+        game.audio.kill(e.headshot);
+      } else if (e.trueFaction === 'ally' && e.attackerFaction === 'enemy') {
+        this.feedRaw('<span class="tag ally">아군</span> 아군 전사', 'bad');
+      }
     });
     ev.on(Events.SCORE_KILL, (e) => {
       this.popup(e);
       this.feed(e);
     });
+    ev.on(Events.SCORE_EVENT, (e) => {
+      this.popupRaw(`<b>+${e.points}</b> ${e.label}`, 'small');
+      if (e.kind === 'evac') {
+        this.feedRaw(`<span class="tag civ">민간인</span> 대피 성공 <b>+${e.points}</b>`);
+        game.audio.evacChime();
+      } else this.feedRaw(`<span class="tag ally">아군</span> 사살 어시스트 <b>+${e.points}</b>`);
+    });
+    ev.on(Events.FRIENDLY_FIRE, (e) => this.showFriendlyFire(e));
     ev.on(Events.PLAYER_DAMAGED, (e) => {
       this.vignette = Math.min(1, this.vignette + e.amount / 22);
       if (e.sourcePosition) this.addDamageDir(e.sourcePosition);
       game.audio.hurt();
     });
     ev.on(Events.THREAT_LEVEL, (e) => this.showBanner(`위협 단계 ${e.level}`, '적의 수와 정확도가 올라갑니다'));
+  }
+
+  // 오인 사격 피드백: 가장자리 플래시 + 전용 마커 + 효과음 + 중앙 경고 문구
+  showFriendlyFire(e) {
+    const civ = e.kind === 'civHit' || e.kind === 'civKill';
+    const killed = e.kind === 'allyKill' || e.kind === 'civKill';
+    for (const el of [this.el.ffFlash, this.el.ffMarker, this.el.ffWarning]) {
+      el.classList.toggle('civ', civ);
+      el.classList.remove('pop', 'show');
+      void el.offsetWidth;
+    }
+    this.el.ffFlash.classList.add('pop');
+    this.el.ffMarker.classList.add('pop');
+    const title = civ ? (killed ? '민간인 사망!' : '민간인 피해!') : killed ? '아군 사살!' : '아군 사격!';
+    const warn = killed ? ` · 경고 <b>${e.warnings}/${e.maxWarnings}</b>` : '';
+    const lock = killed ? ' · 콤보 잠금' : ' · 콤보 초기화';
+    this.el.ffWarning.innerHTML = `<div class="t">${title}</div><div class="s"><b>${e.points}</b>${lock}${warn}</div>`;
+    this.el.ffWarning.classList.add('show');
+    this.game.audio.friendlyFire(killed);
+    this.popupRaw(`<b>${e.points}</b> ${title.replace('!', '')}`, 'penalty');
+    this.feedRaw(`<span class="tag ff">오인</span> ${title.replace('!', '')} <b>${e.points}</b>`, 'bad');
+  }
+
+  popupRaw(html, cls = '') {
+    const div = document.createElement('div');
+    div.className = `popup ${cls}`;
+    div.innerHTML = html;
+    this.el.popups.appendChild(div);
+    setTimeout(() => div.remove(), 1400);
+    while (this.el.popups.children.length > 4) this.el.popups.firstChild.remove();
+  }
+
+  feedRaw(html, cls = '') {
+    const div = document.createElement('div');
+    div.className = `feed ${cls}`;
+    div.innerHTML = html;
+    this.el.killfeed.prepend(div);
+    setTimeout(() => div.classList.add('fade'), 4000);
+    setTimeout(() => div.remove(), 4800);
+    while (this.el.killfeed.children.length > 6) this.el.killfeed.lastChild.remove();
   }
 
   show(v) {
@@ -86,6 +158,8 @@ export class HUD {
     this.vignette = 0;
     this.hitT = this.killT = 0;
     this.el.banner.classList.remove('show');
+    this.el.ffWarning.classList.remove('show');
+    this._last = {};
   }
 
   showHit(headshot) {
@@ -181,6 +255,33 @@ export class HUD {
     if (this._last.pips !== lvl) {
       this._last.pips = lvl;
       this.el.threatPips.innerHTML = Array.from({ length: CONFIG.threat.maxLevel }, (_, i) => `<i class="${i < lvl ? 'on' : ''}"></i>`).join('');
+    }
+
+    // 경고 횟수
+    const pen = game.penalty;
+    const maxW = CONFIG.penalty.maxWarnings;
+    if (this._last.warn !== pen.warnings) {
+      this._last.warn = pen.warnings;
+      this.el.warnPips.innerHTML = Array.from({ length: maxW }, (_, i) => `<i class="${i < pen.warnings ? 'on' : ''}"></i>`).join('');
+      this.el.warnText.textContent = `${pen.warnings}/${maxW}`;
+      this.el.warnings.classList.toggle('danger', pen.warnings >= maxW - 1);
+    }
+    // 콤보 잠금
+    this.el.comboLock.classList.toggle('active', s.comboLocked);
+    if (s.comboLocked) this._set('lock', this.el.comboLockT, s.comboLockT.toFixed(1));
+    // 나침반 (북=-z)
+    const fwd = game.camera.matrixWorld.elements;
+    const heading = (Math.atan2(-fwd[8], fwd[10]) * 180) / Math.PI;
+    const pxPerDeg = 2.2;
+    for (const m of this.compassMarks) {
+      let off = m.a - heading;
+      off = ((off + 540) % 360) - 180;
+      if (Math.abs(off) > 62) {
+        m.span.style.display = 'none';
+        continue;
+      }
+      m.span.style.display = '';
+      m.span.style.left = `${130 + off * pxPerDeg}px`;
     }
 
     // 콤보

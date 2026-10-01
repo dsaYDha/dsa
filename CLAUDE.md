@@ -16,7 +16,7 @@
 | 단계 | 내용 | 상태 |
 | --- | --- | --- |
 | 1 | 핵심 사격 루프 (맵·플레이어·무기·적군·스폰 디렉터·점수·흐름) | **완료** |
-| 2 | 민간인·아군 NPC, 오인 사격 페널티 | 예정 (구조 준비됨) |
+| 2 | 민간인·아군 NPC, 오인 사격 페널티 | **완료** |
 | 3 | 위장 적, 시각 단서 관찰 시스템 | 예정 (구조 준비됨) |
 | 4 | 말 걸기·구두 문답 (암구호, 실내 확인 문답, "손 들어") | 예정 (구조 준비됨) |
 | 5 | 난이도 곡선, 결과 화면, 연출·사운드 마무리, 최적화 | 예정 |
@@ -33,6 +33,28 @@
 - 점수·콤보·멀티킬·즉응 사살, HUD(미니맵 없음), 시작/일시정지(감도·FOV·볼륨)/결과 화면, localStorage 저장
 - 디버그 오버레이(`` ` ``)
 
+### 2단계에서 구현한 것
+
+- **1단계 버그 수정**: 적 `engage` 지속 시간이 매 프레임 다시 뽑히던 문제(`engageDur` 저장), NPC 끼리 겹쳐 지나가던 문제(`isBlockedAhead` 양보 — 플레이어 몸도 장애물로 취급)
+- **공통 병사 베이스 `Soldier`**: 1단계 `EnemySoldier` 의 지각·사격·엄폐 주기·탄창 로직을 뽑아 적·아군이 공유. 대상은 `'player'` 또는 NPC. NPC 대상 사격은 실제 `takeDamage`(공격자 = 그 NPC)로 처리
+- **아군 `AllySoldier` + `AllySquad`**: 파란 표식, 아군 장비 세트(낮고 넓은 헬멧·뒷목 가리개, 직선 탄창 소총). 2~4명 분대가 알려진 적 쪽 엄폐 지점으로 전진·교전, 적이 없으면 근처 건물 실내 소탕 또는 플레이어 뒤·옆으로 재집결.
+  낮은 명중률(0.12)의 제압 사격(근처로 지나간 탄은 적을 숨게 함), 적만 공격. 무전 콜아웃(적 발견·위치·거리, 엄호, 재장전, 클리어, 피격, 합류·이동).
+  사선 회피(조준선 앞에서 앉기/옆 노드로 비키기, 플레이어가 쏘는 중이면 즉시 + 가로지르기 전에 틈 기다림, 가끔은 그냥 가로지름).
+  분대 교대: 55~95초 머문 뒤 조용하면 화면 밖으로 이동·퇴장 → 새 증원 분대가 같은 출현 지점에서 등장
+- **민간인 `CivilianNPC`**: 사복 파츠(상의 4종·바지·모자 4종·가방 3종·짐 들기·사복 신발), 성인·노인(구부정·느림), 비무장 맨손.
+  상태 `enter → move → hide/peek → cower → flee → (대피 성공 시 사라짐)`. 방 안 가구 옆·창가·차량 뒤에 숨고, 근처 총성에 웅크려 비명,
+  조용해지면(또는 여러 번 웅크린 뒤 짧은 틈에) 맵 가장자리 대피 지점으로 달아남. 가까이서 조준당하면 움찔 → 손 들기 + "쏘지 마세요!".
+  민간인이 죽으면 반경 35m 민간인 공황(흩어져 도주). 적·아군 탄은 민간인을 맞히지 않음
+- **오인 사격 `PenaltySystem`**: 1단계 `NPC_DAMAGED/KILLED` 구독 → 피해자 `trueFaction` 기준 감점·콤보 초기화/잠금·경고·아군 무전 두절, 경고 3회 → `OPERATION_DISMISSED` → 작전 해임 결과 화면
+- **스폰 디렉터 확장**: 출현 비율 적 65 / 아군 15 / 민간인 20 (크레딧 방식), 아군·민간인도 적과 같은 출현 지점·등장 방식·예고음.
+  돌발 조우(8m 이내 출입구·모퉁이, 적 50/아군 25/민간인 25, 짧은 예고음), 위협 단계가 오를수록 교전 중인 적 근처에 섞여 등장,
+  습격 구간 아군 증원 2배, 소강·정리 구간·공황 중 민간인 대피 증가, 종류별 상한(적 4~14 / 아군 6 / 민간인 10)
+- **자막·음성 `VoiceSystem`**: 하단 자막(화자 라벨, 우선순위 큐, 중복 억제, 채널 차단), 선택적 Web Speech(ko-KR, NPC 마다 음높이·속도), 설정 토글(기본 꺼짐)
+- **HUD·결과**: 경고 (0/3), 콤보 잠금 남은 시간, 나침반(무전 방위 확인용), 자막, 오인 사격 피드백(가장자리 섬광·전용 마커·효과음·중앙 경고 문구).
+  결과 화면에 종료 사유(전사/작전 해임)와 아군·민간인 피격/사살, 대피, 어시스트, 오인 사격 감점, 경고
+- **디버그 오버레이**: 종류별 활성 수/상한, 출현 누계·비율, 크레딧, 돌발 조우, 페널티 상태, 모든 NPC 머리 위 `trueFaction`(겉보기와 다르면 함께)
+- 다음 단계 준비: 모든 NPC 장비 구성을 데이터로 조회(`npc.getEquipment()`), `E`·`Q`·`1~4` 미사용 유지
+
 ## 실행·테스트
 
 - 실행: 저장소 루트에서 `python3 -m http.server 8000` → `http://localhost:8000` (자세한 내용은 README.md)
@@ -44,6 +66,11 @@
   시작→출현→사살→사망→결과→재시작, 8개 건물 모두 문→계단→최상층/옥상 키 입력 보행, 창밖 시야,
   시야 안 생성 0건(2개 시드, 각 5분 봇 플레이 50여 회 생성 중), 콘솔 에러·경고 0건, 같은 시드 재생성 결정성.
   헤드리스는 GPU 가 아니라 FPS 대신 드로우콜(적 9명 기준 약 210)과 업데이트 CPU 시간(약 1ms)으로 성능을 확인했다.
+- 2단계 검증(같은 Playwright 환경): 1단계 회귀(8개 건물 계단 보행, 사망→결과→재시작, 일시정지, 시드 결정성) 통과, 콘솔 에러·경고 0건.
+  오인 사격 → 경고 3회 → 작전 해임 결과 화면, 적·아군·민간인 근접 외형/자세 스크린샷, 아군↔적 교전·사살·어시스트, 민간인 숨기·웅크림·대피·손 들기,
+  출현 비율(여러 시드 300초: 적 61~65 / 아군 15~20 / 민간인 17~20%), 돌발 조우 300초당 4~5회.
+  NPC 27명(적 12·아군 5·민간인 9) 동시: 드로우콜 206~235, 업데이트 약 0.6ms/프레임.
+  '확인 후 사격' 봇 vs '보이는 대로 사격' 봇 비교는 아래 "기대 점수 분석" 참고.
 
 ## 폴더 구조
 
@@ -79,14 +106,25 @@ js/
     Weapon.js         소총 로직 (발사·탄퍼짐·반동·재장전·정조준)
     WeaponView.js     1인칭 총기 모델·애니메이션 (별도 씬/카메라 패스)
   npc/
-    NPCBase.js        ★ 모든 인물 NPC 공통 베이스 (trueFaction/apparentFaction, 피해·사망 이벤트, 경로 이동)
-    HumanoidRig.js    파츠 조립식 인간형 + 절차적 애니메이션 (뼈별 강체 스키닝 SkinnedMesh)
-    Insignia.js       ★ 표식 컴포넌트 (색·형태 교체 가능)
-    EnemySoldier.js   적군 AI 상태 머신 (소총수/돌격병/창문 사수)
-    NPCManager.js     생성·갱신·히트박스 레이캐스트·엄폐/창가 선택·화면 노출 추적·getAimedNPC
-  director/SpawnDirector.js ★ 스폰 디렉터 (리듬·출현 지점·예고음·위협 단계, 인구/생성기 등록 구조)
+    NPCBase.js        ★ 모든 인물 NPC 공통 베이스 (trueFaction/apparentFaction, 피해·사망 이벤트, 경로 이동, 장비 조회·적대 판정)
+    HumanoidRig.js    파츠 조립식 인간형 + 절차적 애니메이션 (뼈별 강체 스키닝 SkinnedMesh) — 헬멧·소총·신발·상의·가방 변형, 손 들기·웅크림·짐 들기 자세
+    Outfits.js        ★ 복장 생성 (soldierOutfit: 진영 장비 세트 / civilianOutfit: 사복 무작위) + describeEquipment (장비 데이터)
+    Insignia.js       ★ 표식 컴포넌트 (색·형태 교체 가능, 헬멧 형태별 띠, describe())
+    Soldier.js        ★ 적·아군 공통 병사 베이스 (지각·대상 선택·조준·점사·탄창·엄폐 주기·NPC 대상 사격)
+    EnemySoldier.js   적군 AI 상태 머신 (소총수/돌격병/창문 사수) — 플레이어 우선, 근처 아군도 공격
+    AllySoldier.js    아군 AI (enter/move/cover/hold/clear, 사선 회피, 분대 교대 퇴장)
+    AllySquad.js      아군 분대 (목표: 전진·실내 소탕·재집결·교대 이동, 무전 콜아웃)
+    CivilianNPC.js    민간인 AI (숨기·엿보기·웅크림·대피·손 들기·공황)
+    NPCManager.js     생성(spawnEnemy/spawnAllySquad/spawnCivilian)·갱신·히트박스 레이캐스트·엄폐/창가 선택·화면 노출 추적·getAimedNPC·진영별 목록·대피 지점
+  director/
+    SpawnDirector.js  ★ 스폰 디렉터 (리듬·출현 지점·예고음·위협 단계, 인구/생성기 등록 구조, 출현 비율 크레딧, spawnAppearance)
+    Populations.js    등록되는 인구: AllyPopulation(증원 분대·교대), CivilianPopulation(초기 배치·등장·대피 유도), AmbushEvent(돌발 조우)
+  dialogue/
+    VoiceSystem.js    ★ 자막·음성 모듈 (화자 라벨, 우선순위 큐, 채널 차단, Web Speech 선택) — 4단계 문답에서 재사용
+    Callouts.js       무전·외침 대사 목록(LINES), 방위·위치 묘사(describeLocation: "동쪽 건물 2층 창문" 등)
   game/
-    ScoreSystem.js    점수·콤보·멀티킬·즉응 사살·결과 통계
+    ScoreSystem.js    점수·콤보·멀티킬·즉응 사살·결과 통계 + 감점(applyPenalty)·콤보 초기화/잠금·어시스트·대피 점수
+    PenaltySystem.js  ★ 오인 사격 페널티 (감점·콤보 잠금·경고·무전 두절·작전 해임)
     Combat.js         히트스캔 판정 (월드 vs NPC 히트박스, 가까운 쪽)
   ui/
     HUD.js            HUD 전체
@@ -99,6 +137,15 @@ js/
 모든 튜닝 수치와 키 설정은 **`js/config.js`** 한 파일에 있다.
 `CONFIG.keys`(키), `CONFIG.reservedKeys`(E·Q·1~4 예약), `CONFIG.weapon`, `CONFIG.npc`, `CONFIG.threat`(레벨 1 → 최고 레벨 보간 값),
 `CONFIG.director`, `CONFIG.score`, `CONFIG.factions`(진영별 표식 색·군복 색), `CONFIG.map`, `CONFIG.atmosphere`, `CONFIG.render`.
+
+2단계 추가:
+- **`CONFIG.penalty`** — 오인 사격 수치 전부: `allyHit -200`, `allyKill -1000`, `allyKillComboLock 10`(초), `allyKillRadioMute 30`(초), `civHit -300`, `civKill -1500`, `civKillComboLock 15`, `maxWarnings 3`
+- `CONFIG.score.assist`(+30), `CONFIG.score.evacuation`(+25)
+- `CONFIG.ally` — 분대 크기·상한·체력·명중률·피해·사선 회피(`sightLine`)·교대(`tour`, `minTour`, `withdrawQuiet`, `withdrawDist`, `leaveDist`)
+- `CONFIG.civilian` — 상한·체력·노인 비율·웅크림/대피 시간·조준 반응·공황 반경·초기 배치 수·대피 가장자리 거리
+- `CONFIG.director.mix`(적 65/아군 15/민간인 20), `assaultAllyMul`, `mixNearEnemyChance`, `CONFIG.director.ambush`(돌발 조우 간격·거리·비율·예고음)
+- `CONFIG.gearSets` — 진영별 장비 세트(헬멧·소총·신발), `CONFIG.npc.accuracyVsNpc / damageVsNpcMul / yieldRadius`
+- `CONFIG.voice` — 자막 줄 수·표시 시간·중복 억제, `CONFIG.defaults.speech`(음성 기본 꺼짐)
 위협 단계 보간은 `threatT / lerpThreat / lerpRangeThreat` 유틸을 쓴다.
 
 ## 핵심 클래스와 역할
@@ -111,7 +158,14 @@ js/
 - **SpawnDirector**: `HostilePopulation`(리듬), `spawnHostile`, `pickSpawnPoint`, `isSpawnVisible`, `registerPopulation`, `registerFactory`
 - **Insignia**: `setColor(hex)`, `setShape('band'|'armband'|'helmet'|'none')`, `setVisible`
 - **HumanoidRig**: `applyOutfit(outfit)`(같은 뼈대에 다른 복장), `animate(dt, {speed, aim, aimPitch, crouch})`, `onHit`, `startDeath`
-- **ScoreSystem**: `NPC_KILLED` 구독 → 점수·콤보 계산 → `SCORE_KILL` 발행
+- **ScoreSystem**: `NPC_KILLED` 구독 → 점수·콤보 계산 → `SCORE_KILL` 발행. `applyPenalty(points)`, `resetCombo()`, `lockCombo(sec)`, `comboLocked`, 어시스트·대피 → `SCORE_EVENT`
+- **Soldier** (적·아군 공통): `target`('player' 또는 NPC), `candidateTargets()`(서브클래스가 정의), `rollDamage(target)`, `_perceive`, `_shooting`, `_fireShot`, `_coverCycle`, `_goTo`
+- **AllySoldier / AllySquad**: `squad.plan()`(전진·소탕·재집결), `squad.callout(member, text, priority)`, `squad.reportEnemy`, `squad.withdraw()`, `member.orderMove/orderClear/orderWithdraw`
+- **CivilianNPC**: `hearDanger(pos, dist)`, `onAimedAt(dt)`(손 들기), `startPanic()`, `encourageFlee()`, 대피 성공 시 `CIVILIAN_EVACUATED`
+- **PenaltySystem**: `warnings`, `allyHits/allyKills/civHits/civKills`, `stats()`, `reset()`
+- **VoiceSystem** (`game.voice`): `say({speaker, text, channel, priority, voice, force, duration})`, `mute(channel, sec)`, `isMuted`, `muteRemaining`, `setSpeech(on)`, `clear()`, `history`
+- **NPC 공통 조회** (3단계 판단용): `npc.getEquipment()` → `{ faction, headwear, helmetStyle, weapon, rifleStyle, magazine, footwear, footwearClass, vest, top, bag, elder, insignia:{visible,color,colorName,shape}, hands }`,
+  `npc.handsState()` → `'weapon'|'aiming'|'raised'|'covering'|'carrying'|'empty'`, `npc.isHostileTo(other)`
 
 ### 이벤트 (js/core/EventBus.js `Events`)
 
@@ -132,38 +186,46 @@ js/
 }
 ```
 
+2단계에서 페이로드에 `attackerFaction`('player' | NPC 의 trueFaction)과 `victimKind`('enemy'|'ally'|'civilian')를 추가했다. NPC 가 NPC 를 쏴도 같은 이벤트가 나간다(`attacker` = NPC).
+
 그 외: `NPC_SPAWNED`, `NPC_REMOVED`, `PLAYER_DAMAGED {amount, health, sourcePosition, attacker}`, `PLAYER_DIED`,
 `WEAPON_FIRED {shooter, isPlayer, position, direction}`, `BULLET_NEAR_MISS`, `SCORE_KILL`, `DIRECTOR_PHASE`, `THREAT_LEVEL`, `GAME_STATE`.
+2단계 추가: `SCORE_EVENT {kind:'assist'|'evacuation', points, label}`, `FRIENDLY_FIRE {kind:'allyHit'|'allyKill'|'civHit'|'civKill', points, warnings, maxWarnings, victim, apparentFaction}`,
+`OPERATION_DISMISSED {warnings}`, `CIVILIAN_EVACUATED {npc, position, time}`, `AMBUSH {kind, spawnPoint, npc}`.
 
 ## 다음 단계 연결 지점
 
-### 2단계 — 민간인·아군, 오인 사격 페널티
-- `NPCBase` 를 상속해 `CivilianNPC`(trueFaction `civilian`), `AllyNPC`(`ally`)를 `js/npc/` 에 추가한다.
-  복장은 `defaultOutfit(CONFIG.factions.xxx)` 를 바탕으로 만들고 민간인은 `headwear: 'none'`, `vest: null`, `rifle: false` 등.
-- `NPCManager.spawnEnemy` 와 같은 패턴으로 생성 함수를 만들고 `director.registerFactory('civilian', fn)` 로 등록.
-- 배치는 `director.registerPopulation(pop)` — `pop` 은 `update(dt) / reset() / onSpawned(npc, req) / debugInfo()` 를 가진 객체.
-  건물 안 방(`spawnPoints` 의 `room` 타입), 거리 노드를 쓰면 된다. `director.isSpawnVisible()` 재사용 가능.
-- 페널티: `Events.NPC_DAMAGED / NPC_KILLED` 를 구독해 `trueFaction !== 'enemy'` 일 때 처리. (현재 `ScoreSystem.onKill` 은 적이 아니면 무시)
-- 적 AI 가 아군을 노리게 하려면 `EnemySoldier._perceive` 의 대상 선택(현재 플레이어 고정)을 일반화한다.
-- `NPCManager.countActive(faction)`, 디버그 라벨은 이미 진영별로 동작한다.
+### 2단계 — 완료
+- 아군·민간인 추가는 위 구조(`NPCBase` 상속 → `NPCManager.spawnXxx` → `director.registerFactory` / `registerPopulation`)를 그대로 따랐다.
+  새 인물 종류도 같은 패턴으로 추가하면 된다. 페널티는 `PenaltySystem` 이 `NPC_DAMAGED/KILLED` 의 `trueFaction` 으로 판정한다.
 
 ### 3단계 — 위장 적, 시각 단서 관찰
-- 위장: `npc.setApparentFaction('ally')` → 표식이 파란색으로 바뀌고, `setApparentFaction('civilian', 사복outfit)` → 사복 + 표식 제거.
-  `trueFaction` 은 그대로 `enemy` 라 점수·AI 판정은 바뀌지 않는다.
-- 시각 단서: `HumanoidRig.buildGeometries` 의 파츠(군화·조끼·총기 등)를 outfit 옵션으로 바꿔 끼우거나 `Insignia.setShape` 로 형태 이상(한쪽 완장만 등)을 만든다.
+- 위장: `npc.setApparentFaction('ally')` → 표식이 파란색으로 바뀌고, `setApparentFaction('civilian', civilianOutfit())` → 사복 + 표식 제거.
+  `trueFaction` 은 그대로 `enemy` 라 점수·페널티·AI 적대 판정은 바뀌지 않는다. 디버그 라벨은 겉보기 소속이 다르면 `enemy(겉:ally)` 로 표시된다.
+- **장비 세트가 단서의 기준**: 진짜 아군은 항상 `CONFIG.gearSets.ally`(낮고 넓은 헬멧·뒷목 가리개, 직선 탄창, 검은 개머리판), 진짜 적은 항상 `gearSets.enemy`(챙 있는 둥근 헬멧, 굽은 탄창, 나무 개머리판).
+  `setApparentFaction('ally')` 만 하면 표식만 파랗고 장비는 적 세트로 남는다 → 그 자체가 관찰 단서. 단서를 숨기려면 outfit 의 `helmetStyle`/`rifleStyle` 을 바꿔 넘긴다.
+  사복 위장은 `civilianOutfit()` 결과를 고쳐(`footwear: 'combat'` 군화, `rifle`/`bag` 등) 넘기면 된다. 신발은 `footwear`('combat'|'sneakers'|'dress'|'work')로 이미 파츠가 다르다.
+- 판정 데이터: `npc.getEquipment()`(위 형식)·`npc.handsState()`·`npc.insignia.describe()` — 관찰 모드(Q)는 이 값을 읽어 표시/판정하면 된다.
+  표식 형태 이상(한쪽 완장만 등)은 `Insignia.setShape` 에 형태를 추가해 만든다(`'band'|'armband'|'helmet'|'none'`).
+- 적대 판정 예외(위장 적이 아군인 척 접근 등)는 `NPCBase.isHostileTo` 와 `EnemySoldier.candidateTargets` 에서 확장한다.
 - 관찰 모드 키 `Q` 는 `CONFIG.reservedKeys.observe` 에 예약되어 있다.
 
 ### 4단계 — 말 걸기·구두 문답
-- 조준 대상: `game.npcs.getAimedNPC({ maxDistance, coneDeg })` → `{ npc, distance }`
+- 조준 대상: `game.npcs.getAimedNPC({ maxDistance, coneDeg })` → `{ npc, distance }` (민간인 손 들기 반응도 이걸 0.1초마다 쓴다: `NPCManager._updateAim`)
 - 실내 판별: `game.world.isIndoors(pos)` / `game.world.getIndoorInfo(pos)` → `{ building, floor, room }`
+- 대사·자막: `game.voice.say({ speaker: '민간인', text, channel: 'shout', priority, voice: npc.voice })` — NPC 마다 `npc.voice {id, pitch, rate}` 가 있어 TTS 를 켜면 사람마다 목소리가 다르다.
+  플레이어 대사도 같은 모듈로(`speaker: '나'` 등). 대사 목록은 `dialogue/Callouts.js` 의 `LINES` 패턴을 따르면 된다.
+- 민간인의 손 들기(`npc.handsUp`)·웅크림(`npc.cower`)은 애니메이션 입력값이라 "손 들어" 명령도 이 값을 쓰면 된다.
 - 키 `E`, `1`~`4` 는 `CONFIG.reservedKeys` 에 예약. `Input.onKey` 콜백 또는 `Input.down` 으로 읽으면 된다.
-- 판단 통계: `NPC_DAMAGED/KILLED` 의 `timeSinceFirstSeen`, `apparentFaction` 활용.
+- 판단 통계: `NPC_DAMAGED/KILLED` 의 `timeSinceFirstSeen`, `apparentFaction`, `FRIENDLY_FIRE` 활용.
 
 ### 5단계 — 다듬기
 - 난이도 곡선은 `CONFIG.threat`(레벨별 상한·명중률·반응 시간·우회 확률·웨이브 크기·출현 간격·유형 가중치)만 조절하면 된다.
 - 결과 화면(`Menus.showResult`)·기록(`Records`)이 이미 있다.
 
-## 이번 단계에서 임의로 정한 설계 결정
+## 임의로 정한 설계 결정
+
+### 1단계 설계 결정
 
 1. **Three.js 0.170.0** 을 jsDelivr 에서 고정 버전으로 사용 (Octree/Capsule/BufferGeometryUtils 애드온 포함).
 2. **맵 치수**: 150m, 4×4 블록(블록 28m), 도로 10m(인도 1.8m), 골목 3.2m, 가장자리 4m 는 잔해 둑. 바깥으로 못 나가게 ±72.9m 에 보이지 않는 벽.
@@ -198,10 +260,50 @@ js/
     (모래주머니 8단 1.32m, 콘크리트 방벽 1.25m, 차량 옆면(지붕 1.42m), 2단 상자, 1.3m 쓰레기통, 높이 1.25~2.4m 잔해 더미, 1.25~1.9m 남은 벽).
     그래서 '엄폐물 뒤 웅크린 채 생성'이 시야 판정과 실제 화면에서 일치한다. 창턱(0.95m)은 이보다 낮아 창가 사수의 헬멧이 살짝 보인다(의도된 단서).
 
+### 2단계 설계 결정
+
+22. **출현 비율 = 크레딧 방식**: 적이 한 명 출현 예약될 때마다 아군 크레딧 +15/65(습격 구간 ×2), 민간인 +20/65. 크레딧이 차면 같은 출현 지점 카탈로그·등장 방식·예고음으로 등장
+    (아군 분대는 인원수만큼 크레딧 소모·집계). 1단계 적 리듬(소강→산발→습격→정리)은 건드리지 않는다. 시작 배치(아군 첫 분대, 숨어 있는 민간인 3~5명)는 비율 집계에서 뺀다.
+23. **분대 교대**: 아군 상한(6)이 차면 증원이 못 들어오므로, 분대는 55~95초(증원 대기 중이면 35초 이상) 머물고 8초 이상 교전이 없으면 "다른 구역 지원" 무전 후
+    32~60m 밖 진입 지점으로 이동, 플레이어 화면 밖 + 24m 이상(도착 후엔 12m)이면 사라진다. 그래서 아군이 계속 "새로" 나타난다.
+24. **돌발 조우**: 첫 25~35초 뒤, 이후 38~70초(최고 위협 20~38초) 간격. 3.5~8m 의 같은 층, 플레이어 시야 밖 출입구·골목 끝·방·엄폐물 뒤에서 0.25~0.5초 예고음 후 등장.
+    적은 돌격(rush)으로 바로 다가오지만 등장 유예(1.4초) 동안 명중 불가라 판단할 시간이 있다. 돌발 아군은 1.2초 뒤에야 "아군이다! 쏘지 마!" (판단을 먼저 시험).
+    근처에 숨은 지점이 없으면 4초 뒤 다시 시도한다(제자리에 서 있으면 드물게 나온다).
+25. **위협 단계와 혼재**: 아군·민간인 등장 시 `mixNearEnemyChance`(15% → 60%) 확률로 지금 교전 중인 적 근처(아군 20m·민간인 14m)의 출현 지점을 고른다 — 사선 위 민간인, 적과 붙은 아군.
+26. **피아 판정은 trueFaction**: 적은 플레이어(최우선)와 50m 안 아군 최대 2명을 대상 후보로, 아군은 적만. NPC 탄은 같은 편·민간인에게 피해 없음(판정 자체를 안 함).
+    적→아군 명중률 ×0.75, 피해 ×1.5(아군이 너무 오래 버티지 않게). 아군 명중률 0.12·피해 22 — 적 처치의 주인공은 플레이어.
+27. **페널티**: 피격은 총알마다(−200/−300 + 콤보 초기화), 사살은 그 한 번(−1000/−1500 + 콤보 잠금 + 경고). 경고는 사살에만. 콤보 잠금 중엔 사살해도 배율이 오르지 않는다(×1 유지).
+    아군 사살 시 30초 무전 두절 — 단, 맞은 아군의 "사격 중지!" 외침(`shout` 채널, `force`)은 항상 들린다. 플레이어가 죽인 아군에 대해선 분대가 "한 명 당했다" 무전을 하지 않는다.
+28. **아군 체력 120**: 플레이어 소총 헤드샷(30×3.6=108)으로 즉사하지 않게 — 빗나간 한 발엔 −200 으로 끝나고 "사격 중지!" 를 듣고 멈출 기회가 있다. 민간인은 50(몸통 2발, 머리 1발).
+29. **사선 회피 규칙**: 조준선(폭 0.8m + 거리×1%) 위에 0.45초 이상 있으면 반응. 플레이어가 쏘는 중이면 즉시. 조준선이 앉은 머리(1.4m)보다 높으면 앉고, 낮으면(플레이어가 앉아 쏘는 중 등) 옆 노드로 비킨다.
+    이동 중엔 쏘고 있는 조준선을 가로지르기 직전에 0.8~2.2초 멈춰 틈을 기다린다(12.5% 는 그냥 가로지름 — 긴장 요소). 플레이어 3m 이내·정면 조준선 위 지점은 분대 목표에서 감점.
+30. **민간인 대피**: 숨은 민간인은 (조용함 3~6초 + 확률) 또는 (3번 이상 웅크린 뒤 1.2초 조용 + 7m 안에 적 없음)일 때 맵 가장자리(내부 경계에서 13m 안쪽) 실외 노드로 달아나 도착하면 사라짐(+25).
+    비명은 사람마다 6초, 자막은 전체 8초·사람마다 15초 간격(교전이 길어도 자막이 비명으로 덮이지 않게).
+31. **나침반**: 무전 위치 묘사("동쪽 골목", "북서쪽 잔해 뒤")가 실제로 쓸모 있으려면 방위를 알아야 해서 화면 위에 나침반을 추가했다. 북 = −z.
+32. **작전 해임 처리**: 경고 3회 → 상태 `dead`(사유 `dismissed`), 지휘부 무전 + 배너 후 3.4초 뒤 결과 화면. 해임된 판의 생존 시간은 최장 생존 기록에 넣지 않는다.
+33. **음성**: Web Speech 는 기본 꺼짐(설정에서 켬). 한국어 음성이 없으면 켜도 자막만 나오고 설정 화면에 안내한다. 자막은 음성과 무관하게 항상 표시.
+
+### 기대 점수 분석 (오인 사격 수치 근거)
+
+- 적 사살 1명 ≈ 기본 100 + 즉응 50(+헤드샷 50) → 150~200, 콤보가 이어지면 ×1.5~×4.
+- **보이는 대로 끝까지 쏘는 경우** 인물 1명당 기대값 (출현 비율 65/15/20, 아군 체력 120 → 몸통 4발, 민간인 50 → 2발):
+  `0.65 × (150 × 평균 콤보 ×2 ≈ 300) + 0.15 × (−200×3 − 1000 = −1600) + 0.20 × (−300 − 1500 = −1800) ≈ 195 − 240 − 360 = −405`.
+  게다가 35% 확률로 매번 콤보가 초기화·잠금되니 실제 적 점수도 ×1 근처로 떨어지고(→ 약 −500), 경고는 인물 약 8~9명마다 3회가 쌓여 작전 해임.
+- **한 발 쏘고 확인하는 경우**: 아군·민간인마다 −200/−300 + 콤보 초기화 → 콤보를 거의 못 쌓아 확인 후 사격보다 확실히 낮다.
+- **확인 후 사격**: 표식을 보는 0.3~0.5초는 즉응 사살 창(2초)·콤보 창(5초)보다 짧아 손실이 작다.
+- 실측 (헤드리스 봇, 플레이어 무적, 300초, 여러 시드):
+  - 보이는 대로 사격 봇(반응 0.35초): 2~45초 만에 작전 해임(−2,500 ~ −5,200), 해임을 피한 판도 −1,750.
+  - 확인 후 사격 봇(반응 0.75초, 조준선에 비적군이 있으면 사격 보류): +1,200 ~ +18,000 (시작 위치 시야에 따라 편차 큼), 경고 0~1회.
+    남는 오인 사격은 대부분 적과 붙어 싸우는 아군이 탄퍼짐에 맞는 경우 — 의도한 긴장 요소.
+
 ## 알려진 한계 / 개선 후보
 
 - 실제 브라우저 FPS 는 이 환경(헤드리스)에서 측정하지 못했다. 드로우콜·CPU 시간 기준으로만 확인 — 5단계에서 실기기 프로파일링 필요.
-- NPC 끼리의 충돌 회피는 엄폐 지점 예약 정도뿐이다. NPC 탄은 다른 NPC 를 맞히지 않는다.
+- NPC 끼리의 충돌 회피는 엄폐 지점 예약 + 진행 방향 양보(최대 1.5초)뿐이다. 좁은 실내에선 잠깐 겹칠 수 있다.
+- NPC 탄은 겨냥한 대상만 판정한다(사이에 있는 다른 NPC 를 막지 않음). 같은 편·민간인은 NPC 탄에 다치지 않는다(의도).
+- 민간인은 대피 지점에 닿으면 그 자리에서 사라진다(맵 가장자리 잔해 둑 근처라 눈에 잘 띄지 않지만 보일 수는 있다).
+- 돌발 조우는 플레이어 3.5~8m 안에 숨은 출현 지점이 있어야 해서, 넓은 광장 한가운데 오래 서 있으면 잘 안 나온다.
+- 아군 분대 AI 는 단순하다(전진·소탕·재집결·교대). 엄폐 지점이 없는 곳에선 노드 위에 서서 싸운다.
 - 손전등은 그림자가 없어 벽 너머 면도 비출 수 있다(시야에선 가려짐).
 - 진입 불가 건물의 창문은 텍스처일 뿐이라 들여다볼 수 없다(창문 사수·실내전은 진입 가능 건물에서만).
 - 헤드리스 봇 기준 밸런스는 대략적이다. 사람 플레이 테스트로 `CONFIG.threat`·`CONFIG.npc.accuracy` 조정 권장.

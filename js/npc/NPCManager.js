@@ -1,9 +1,12 @@
-// NPC 관리 — 생성·갱신·제거, 부위별 히트박스 레이캐스트, 엄폐/창가 지점 선택,
-// 플레이어 화면 노출 추적(firstSeenAt), 조준 중인 NPC 질의(4단계 말 걸기용)
+// NPC 관리 — 생성(적·아군 분대·민간인)·갱신·제거, 부위별 히트박스 레이캐스트, 엄폐/창가/은신/대피 지점 선택,
+// 플레이어 화면 노출 추적(firstSeenAt), 조준 중인 NPC 질의(4단계 말 걸기용), 진영별 목록, 청각(총성)·공황 전파
 import * as THREE from 'three';
 import { CONFIG } from '../config.js';
 import { Events } from '../core/EventBus.js';
 import { EnemySoldier } from './EnemySoldier.js';
+import { AllySoldier } from './AllySoldier.js';
+import { AllySquad } from './AllySquad.js';
+import { CivilianNPC } from './CivilianNPC.js';
 import { ZONES } from './HumanoidRig.js';
 import { gameRand as R } from '../core/Random.js';
 
@@ -23,13 +26,58 @@ export class NPCManager {
     this._visCursor = 0;
     this._playerNode = null;
     this._playerNodeT = 0;
+    this.squads = [];
+    this.factions = { enemy: [], ally: [], civilian: [] };
+    this._aimT = 0;
+    this._evacNodes = null;
     game.events.on(Events.WEAPON_FIRED, (e) => {
-      if (!e.isPlayer) return;
+      // 적은 플레이어 총성을 듣고, 민간인은 모든 총성에 반응
       const r2 = CONFIG.npc.hearingRadius ** 2;
+      const c2 = CONFIG.civilian.hearRadius ** 2;
       for (const n of this.list) {
-        if (n.alive && n.trueFaction === 'enemy' && n.position.distanceToSquared(e.position) < r2) n.hearShot(e.position);
+        if (!n.alive) continue;
+        const d2 = n.position.distanceToSquared(e.position);
+        if (e.isPlayer && n.trueFaction === 'enemy' && d2 < r2) n.hearShot(e.position);
+        else if (n.trueFaction === 'civilian' && d2 < c2 && e.shooter !== n) n.hearDanger(e.position, Math.sqrt(d2));
       }
     });
+  }
+
+  // 진영별 생존 목록 (프레임마다 갱신)
+  byFaction(f) {
+    return this.factions[f] || [];
+  }
+
+  _rebuildFactions() {
+    const F = this.factions;
+    F.enemy.length = 0;
+    F.ally.length = 0;
+    F.civilian.length = 0;
+    for (const n of this.list) if (n.alive && F[n.trueFaction]) F[n.trueFaction].push(n);
+  }
+
+  // 진행 방향 바로 앞에 다른 NPC 가 있는지 (겹쳐 지나가지 않게 감속)
+  isBlockedAhead(npc, fx, fz) {
+    const r = CONFIG.npc.yieldRadius;
+    // 플레이어 몸을 뚫고 지나가지 않게
+    const pf = this.game.player.feet;
+    if (Math.abs(pf.y - npc.position.y) < 1.2) {
+      const dx = pf.x - npc.position.x;
+      const dz = pf.z - npc.position.z;
+      const d = Math.hypot(dx, dz);
+      if (d < r + 0.35 && d > 1e-3 && (dx * fx + dz * fz) / d > 0.55) return true;
+    }
+    for (const o of this.list) {
+      if (o === npc || !o.alive) continue;
+      const dx = o.position.x - npc.position.x;
+      const dz = o.position.z - npc.position.z;
+      if (Math.abs(o.position.y - npc.position.y) > 1.2) continue;
+      const d2 = dx * dx + dz * dz;
+      if (d2 > r * r || d2 < 1e-6) continue;
+      const d = Math.sqrt(d2);
+      if ((dx * fx + dz * fz) / d > 0.55) return true;
+    }
+    return false;
   }
 
   // ------------------------------------------------------------------
@@ -51,12 +99,52 @@ export class NPCManager {
       buildingId: sp.buildingId,
       apparentFaction: o.apparentFaction,
     });
+    npc.lastKnown.copy(this.game.player.feet);
+    return this._add(npc, sp);
+  }
+
+  // 아군 분대 (2~4명): 리더는 출현 지점, 나머지는 근처 숨은 노드에서 등장
+  spawnAllySquad(o) {
+    const game = this.game;
+    const sp = o.spawnPoint;
+    const size = Math.max(1, o.size || 3);
+    const squad = new AllySquad(game);
+    const leader = new AllySoldier(game, { nodeId: sp.nodeId, entrance: o.entrance, squad });
+    squad.add(leader);
+    this._add(leader, sp);
+    const nav = game.world.nav;
+    const near = nav.inRadius(sp.x, sp.y, sp.z, 6, (n) => n.id !== sp.nodeId && Math.abs(n.y - sp.y) < 1 && n.indoor === nav.get(sp.nodeId).indoor);
+    R.shuffle(near);
+    for (let i = 1; i < size; i++) {
+      const n = near.find((c) => !game.director.isSpawnVisible({ x: c.x, y: c.y, z: c.z }, 'walkOut') && !this.list.some((x) => x.alive && Math.hypot(x.position.x - c.x, x.position.z - c.z) < 1.2)) || nav.get(sp.nodeId);
+      const m = new AllySoldier(game, { nodeId: n.id, entrance: o.entrance, squad });
+      squad.add(m);
+      // 같은 노드면 살짝 비켜 세움
+      this._add(m, { x: n.x + (n.id === sp.nodeId ? R.range(-0.6, 0.6) : 0), y: n.y, z: n.z + (n.id === sp.nodeId ? R.range(-0.6, 0.6) : 0), nodeId: n.id });
+      const idx = near.indexOf(n);
+      if (idx >= 0) near.splice(idx, 1);
+    }
+    this.squads.push(squad);
+    if (o.entrance === 'ambush') {
+      // 돌발 조우 아군: 잠깐 뒤에야 "아군이다!" (판단을 시험하기 위해 바로 외치지 않음)
+      squad.ambushShoutT = 1.2;
+    } else if (o.announce) squad.onArrive();
+    return leader;
+  }
+
+  spawnCivilian(o) {
+    const sp = o.spawnPoint;
+    const npc = new CivilianNPC(this.game, { nodeId: sp.nodeId, entrance: o.entrance, goalNode: o.goalNode, buildingId: sp.buildingId });
+    return this._add(npc, sp);
+  }
+
+  _add(npc, sp) {
     // 플레이어 쪽을 대략 바라보며 등장
     const pp = this.game.player.feet;
     npc.placeAt(sp.x, sp.y, sp.z, Math.atan2(pp.x - sp.x, pp.z - sp.z));
-    npc.lastKnown.copy(pp);
     this.scene.add(npc.root);
     this.list.push(npc);
+    if (this.factions[npc.trueFaction]) this.factions[npc.trueFaction].push(npc);
     this.game.events.emit(Events.NPC_SPAWNED, { npc, spawnPoint: sp });
     return npc;
   }
@@ -67,7 +155,10 @@ export class NPCManager {
       n.dispose();
     }
     this.list.length = 0;
+    this.squads.length = 0;
+    this._rebuildFactions();
     for (const node of this.game.world.nav.nodes) node.reservedBy = null;
+    this._evacNodes = null;
   }
 
   countActive(faction = 'enemy') {
@@ -84,6 +175,20 @@ export class NPCManager {
   update(dt) {
     const game = this.game;
     const pp = game.player.feet;
+    this._rebuildFactions();
+    for (const sq of this.squads) {
+      sq.update(dt);
+      if (sq.ambushShoutT != null) {
+        sq.ambushShoutT -= dt;
+        if (sq.ambushShoutT <= 0) {
+          sq.ambushShoutT = null;
+          const m = sq.alive[0];
+          if (m) game.voice.say({ speaker: '아군', text: '아군이다! 쏘지 마!', channel: 'shout', priority: 2, voice: m.voice });
+        }
+      }
+    }
+    for (let i = this.squads.length - 1; i >= 0; i--) if (this.squads[i].done) this.squads.splice(i, 1);
+    this._updateAim(dt);
     for (const n of this.list) {
       n.update(dt);
       // 실내 음영 + 가까운 NPC 만 그림자
@@ -194,6 +299,66 @@ export class NPCManager {
       }
     }
     return best;
+  }
+
+  // 플레이어가 가까이서 민간인을 조준하면 반응 (0.1초 주기)
+  _updateAim(dt) {
+    this._aimT -= dt;
+    if (this._aimT > 0) return;
+    const step = 0.1;
+    this._aimT = step;
+    if (!this.factions.civilian.length || !this.game.player.alive) return;
+    const a = this.getAimedNPC({ maxDistance: CONFIG.civilian.aimReactDist, coneDeg: 4 });
+    if (a && a.npc.trueFaction === 'civilian' && a.npc.onAimedAt) a.npc.onAimedAt(step);
+  }
+
+  // 민간인 사망 → 주변 민간인 공황 (흩어져 도망) + 디렉터에 공황 시간 통보
+  onCivilianDeath(npc) {
+    const C = CONFIG.civilian;
+    for (const c of this.factions.civilian) {
+      if (c !== npc && c.alive && c.position.distanceTo(npc.position) < C.panicRadius) c.startPanic();
+    }
+    if (this.game.director) this.game.director.civPanicT = C.panicTime;
+  }
+
+  // 맵 가장자리 대피 지점 (도로·골목 노드)
+  get evacNodes() {
+    if (!this._evacNodes) {
+      const C = CONFIG;
+      const inner = C.map.size / 2 - C.map.edgeMargin;
+      const lim = inner - C.civilian.evacEdgeDist;
+      this._evacNodes = this.game.world.nav.nodes.filter((n) => !n.removed && !n.indoor && (n.type === 'street' || n.type === 'alley' || n.type === 'yard') && Math.max(Math.abs(n.x), Math.abs(n.z)) > lim);
+    }
+    return this._evacNodes;
+  }
+
+  evacNodeFor(npc) {
+    const nav = this.game.world.nav;
+    const pp = this.game.player.feet;
+    const list = this.evacNodes
+      .map((n) => ({ n, d: Math.hypot(n.x - npc.position.x, n.z - npc.position.z) + (Math.hypot(n.x - pp.x, n.z - pp.z) < 15 ? 25 : 0) }))
+      .sort((a, b) => a.d - b.d);
+    for (let i = 0; i < Math.min(4, list.length); i++) {
+      if (nav.findPath(npc.navNode, list[i].n.id, { maxIter: 4000 })) return list[i].n.id;
+    }
+    return null;
+  }
+
+  // 민간인 은신 목적지 (엄폐물 뒤·건물 출입구 안쪽) — dist: [최소, 최대]
+  pickCivilianHideNode(npc, dist) {
+    const nav = this.game.world.nav;
+    const cands = nav.inRadius(npc.position.x, npc.position.y, npc.position.z, dist[1], (n) => {
+      if (n.reservedBy && n.reservedBy.alive) return false;
+      const d = Math.hypot(n.x - npc.position.x, n.z - npc.position.z);
+      if (d < dist[0]) return false;
+      return (n.type === 'cover' && !n.indoor) || (n.type === 'door' && n.floor === 0) || n.type === 'room';
+    });
+    R.shuffle(cands);
+    for (const n of cands.slice(0, 6)) {
+      if (this.list.some((o) => o !== npc && o.alive && Math.hypot(o.position.x - n.x, o.position.z - n.z) < 1.5)) continue;
+      if (nav.findPath(npc.navNode, n.id, { maxIter: 3000 })) return n.id;
+    }
+    return null;
   }
 
   // ------------------------------------------------------------------

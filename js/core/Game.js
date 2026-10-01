@@ -14,7 +14,9 @@ import { WeaponView } from '../player/WeaponView.js';
 import { NPCManager } from '../npc/NPCManager.js';
 import { SpawnDirector } from '../director/SpawnDirector.js';
 import { ScoreSystem } from '../game/ScoreSystem.js';
+import { PenaltySystem } from '../game/PenaltySystem.js';
 import { Combat } from '../game/Combat.js';
+import { VoiceSystem } from '../dialogue/VoiceSystem.js';
 import { HUD } from '../ui/HUD.js';
 import { Menus } from '../ui/Menus.js';
 import { DebugOverlay } from '../ui/DebugOverlay.js';
@@ -57,6 +59,9 @@ export class Game {
     this.audio = new AudioSystem();
     this.audio.setVolume(this.settings.volume);
     this.world = new World(this.scene);
+    // 자막·음성 (독립 모듈 — 4단계 대화에서도 재사용)
+    this.voice = new VoiceSystem({ container: document.getElementById('subtitles'), ...CONFIG.voice, onRadio: () => this.audio.radioClick() });
+    this.voice.setSpeech(this.settings.speech);
     this.menus = new Menus(this);
     this.debug = new DebugOverlay(this);
 
@@ -119,6 +124,7 @@ export class Game {
     this.npcs = new NPCManager(this);
     this.director = new SpawnDirector(this);
     this.score = new ScoreSystem(this);
+    this.penalty = new PenaltySystem(this);
     this.hud = new HUD(this);
 
     // 총기 손전등 (월드 조명, 세기만 조절 — 광원 수 고정)
@@ -127,6 +133,7 @@ export class Game {
     this.scene.add(this.flashlight, this.flashlight.target);
 
     this.events.on(Events.PLAYER_DIED, () => this._onPlayerDied());
+    this.events.on(Events.OPERATION_DISMISSED, () => this._onDismissed());
     this.player.reset(this.world.city.playerSpawn, 0);
   }
 
@@ -172,9 +179,12 @@ export class Game {
     this.effects.clear();
     this.director.reset();
     this.score.reset();
+    this.penalty.reset();
+    this.voice.clear();
     this.weapon.reset();
     this.hud.reset();
     this.runTime = 0;
+    this.endReason = null;
     const sp = this.world.city.playerSpawn;
     // 가장 긴 도로 방향을 바라보며 시작
     this.player.reset(sp, R.pick([0, Math.PI / 2, Math.PI, -Math.PI / 2]));
@@ -188,6 +198,7 @@ export class Game {
     this.input.captureKeys = false;
     this.input.clear();
     this.menus.setPauseNote(note);
+    this.menus.updateSpeechNote();
     this.menus.show('pause');
     this.audio.suspend();
     this.events.emit(Events.GAME_STATE, { state: this.state });
@@ -227,9 +238,23 @@ export class Game {
   }
 
   _onPlayerDied() {
+    if (this.state !== 'playing') return;
+    this.endReason = 'killed';
     this.state = 'dead';
     this._deadT = 0;
     this.input.captureKeys = false;
+  }
+
+  // 오인 사격 경고 누적 → 작전 해임 (게임 오버, 전사와 다른 사유)
+  _onDismissed() {
+    if (this.state !== 'playing') return;
+    this.endReason = 'dismissed';
+    this.state = 'dead';
+    this._deadT = 0;
+    this.input.captureKeys = false;
+    this.input.mouseDown[0] = false;
+    this.hud.showBanner('작전 해임', `오인 사격 경고 ${CONFIG.penalty.maxWarnings}회 — 작전에서 해임되었습니다`);
+    this.voice.say({ speaker: '지휘부 무전', text: '사격 중지. 귀관을 작전에서 해임한다. 즉시 복귀하라.', channel: 'radio', priority: 3, force: true });
   }
 
   _finishRun() {
@@ -239,6 +264,8 @@ export class Game {
     this.weaponView.visible = false;
     const r = this.score.result(this.runTime);
     r.accuracy = this.weapon.shotsFired ? this.weapon.shotsHit / this.weapon.shotsFired : 0;
+    Object.assign(r, this.penalty.stats());
+    r.reason = this.endReason || 'killed';
     const updated = this.records.submit(r);
     this.lastResult = r;
     this.menus.showResult(r, updated, this.records);
@@ -258,6 +285,7 @@ export class Game {
     this.input.captureKeys = false;
     this.npcs.clear();
     this.effects.clear();
+    this.voice.clear();
     this.hud.show(false);
     this.weaponView.visible = false;
     this.player.flashlightOn = false;
@@ -323,6 +351,7 @@ export class Game {
     this.npcs.update(dt);
     this.director.update(dt);
     this.score.update(dt);
+    this.voice.update(dt);
     this._updateCommon(dt);
     this.audio.updateHeartbeat(p.health < CONFIG.player.maxHealth * 0.3, this.time);
   }
@@ -330,10 +359,12 @@ export class Game {
   _updateDead(dt) {
     this.time += dt;
     this._deadT += dt;
-    this.player.update(dt, this.input, this.weapon);
+    // 전사면 쓰러지는 시점, 해임이면 그대로 멈춤
+    if (this.endReason === 'killed') this.player.update(dt, this.input, this.weapon);
     this.npcs.update(dt);
+    this.voice.update(dt);
     this._updateCommon(dt);
-    if (this._deadT > 2.4) this._finishRun();
+    if (this._deadT > (this.endReason === 'dismissed' ? 3.4 : 2.4)) this._finishRun();
   }
 
   _updateCommon(dt) {

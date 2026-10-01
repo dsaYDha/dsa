@@ -3,9 +3,13 @@
 // · 플레이어 시야 안에서 갑자기 생성 금지: 시야 밖·가려진 곳에서 생성 후 걸어 나오기/창가에 나타나기/엄폐물에서 튀어나오기
 // · 측면·후방 출현은 발소리·잔해·문 소리를 먼저 들려줌
 // · 1분마다 위협 단계 상승
-// · 확장: registerPopulation() 으로 2단계 민간인·아군, registerFactory() 로 3단계 위장 적 생성기를 붙인다
+// · 2단계: 아군·민간인도 같은 방식·같은 장소로 등장 (출현 비율 적 65 / 아군 15 / 민간인 20, config.director.mix)
+//   적 출현 1회마다 아군·민간인 '출현 크레딧'이 비율대로 쌓이고 각 인구(Populations.js)가 소비한다.
+//   돌발 조우(근거리 8m 이내, 적 50 / 아군 25 / 민간인 25)는 AmbushEvent 가 담당
+// · 확장: registerPopulation() 으로 인구, registerFactory() 로 생성기를 붙인다 (3단계 위장 적도 같은 방식)
 import * as THREE from 'three';
-import { CONFIG, lerpRangeThreat } from '../config.js';
+import { CONFIG, lerpRangeThreat, lerpThreat } from '../config.js';
+import { AllyPopulation, CivilianPopulation, AmbushEvent } from './Populations.js';
 import { Events } from '../core/EventBus.js';
 import { gameRand as R } from '../core/Random.js';
 
@@ -17,6 +21,13 @@ const SPAWN_TYPES = {
   rifleman: { alleyEnd: 1.1, streetEnd: 0.8, doorway: 0.8, room: 0.6, behindCover: 1.6 },
   assault: { alleyEnd: 1.3, streetEnd: 1.0, doorway: 1.0, room: 0.9 },
   window: { window: 1.6, roof: 1.0 },
+  // 2단계: 아군·민간인도 같은 종류의 지점에서 같은 방식으로 등장
+  ally: { alleyEnd: 1.2, streetEnd: 1.0, doorway: 0.9 },
+  civilian: { doorway: 1.1, alleyEnd: 1.0, window: 1.1, behindCover: 0.9, room: 0.6 },
+  // 돌발 조우: 출입구·모퉁이 근거리
+  ambush: { doorway: 1.4, alleyEnd: 1.0, room: 1.0, behindCover: 0.8, streetEnd: 0.6 },
+  // 시작 시 숨어 있는 민간인 (건물 안·창가·차량 뒤)
+  civilianHidden: { room: 1.2, window: 0.8, behindCover: 1.0 },
 };
 
 const _p = new THREE.Vector3();
@@ -176,8 +187,16 @@ export class SpawnDirector {
     this.spawnLog = [];
     this.hostile = new HostilePopulation(this);
     this.registerPopulation(this.hostile);
-    // 생성기: 진영/종류별. 2·3단계에서 'civilian', 'ally', 'disguisedEnemy' 를 추가 등록
+    this.allies = new AllyPopulation(this);
+    this.registerPopulation(this.allies);
+    this.civilians = new CivilianPopulation(this);
+    this.registerPopulation(this.civilians);
+    this.ambush = new AmbushEvent(this);
+    this.registerPopulation(this.ambush);
+    // 생성기: 진영/종류별. 3단계에서 'disguisedEnemy' 를 추가 등록
     this.registerFactory('enemy', (req) => game.npcs.spawnEnemy(req));
+    this.registerFactory('ally', (req) => game.npcs.spawnAllySquad(req));
+    this.registerFactory('civilian', (req) => game.npcs.spawnCivilian(req));
 
     game.events.on(Events.PLAYER_DAMAGED, (e) => { this.intensity = Math.min(1.5, this.intensity + e.amount / 55); });
     game.events.on(Events.NPC_KILLED, () => { this.intensity = Math.min(1.5, this.intensity + 0.07); });
@@ -200,6 +219,10 @@ export class SpawnDirector {
     this.pending.length = 0;
     this.spawnLog.length = 0;
     this._lastSpawnPos = null;
+    this.credits = { ally: 0, civilian: 0 };
+    this.appearances = { enemy: 0, ally: 0, civilian: 0 }; // 실제 등장 인원 (비율 확인용)
+    this.ambushCount = { enemy: 0, ally: 0, civilian: 0 };
+    this.civPanicT = 0;
     for (const sp of this.game.world.spawnPoints || []) sp.lastUsed = -999;
     for (const p of this.populations) p.reset();
   }
@@ -213,6 +236,31 @@ export class SpawnDirector {
     return this.game.npcs.countActive('enemy');
   }
 
+  // 종류별 동시 활성 상한 (적은 위협 단계별)
+  capFor(kind) {
+    if (kind === 'ally') return CONFIG.ally.maxActive;
+    if (kind === 'civilian') return CONFIG.civilian.maxActive;
+    return this.cap;
+  }
+
+  activeCount(kind) {
+    return this.game.npcs.countActive(kind);
+  }
+
+  pendingCount(kind) {
+    let c = 0;
+    for (const p of this.pending) if (p.kind === kind) c += p.size || 1;
+    return c;
+  }
+
+  // 적이 등장할 때마다 아군·민간인 출현 크레딧 적립 (비율 유지)
+  _accrueCredits() {
+    const m = CONFIG.director.mix;
+    const allyMul = this.hostile.phase === 'assault' ? CONFIG.director.assaultAllyMul : 1;
+    this.credits.ally += (m.ally / m.enemy) * allyMul;
+    this.credits.civilian += m.civilian / m.enemy;
+  }
+
   update(dt) {
     const T = CONFIG.threat;
     this.elapsed += dt;
@@ -222,6 +270,7 @@ export class SpawnDirector {
       this.game.events.emit(Events.THREAT_LEVEL, { level: lvl });
     }
     this.intensity = Math.max(0, this.intensity - CONFIG.director.intensityDecay * dt);
+    this.civPanicT = Math.max(0, this.civPanicT - dt);
     for (const p of this.populations) p.update(dt);
 
     // 예고음 뒤 실제 생성
@@ -281,6 +330,64 @@ export class SpawnDirector {
     }
     this._lastSpawnPos = { x: sp.x, z: sp.z };
     this.pending.push(req);
+    this._accrueCredits();
+    return req;
+  }
+
+  // 측면·후방이거나 가까우면 소리를 먼저 (적·아군·민간인 공통 — 소리만으로는 누군지 알 수 없음)
+  _applyCue(req, sp, leadRange = CONFIG.director.cueLead, force = false) {
+    const D = CONFIG.director;
+    const pf = this.game.player.feet;
+    const rel = this.relativeAngle(sp);
+    const dist = Math.hypot(sp.x - pf.x, sp.z - pf.z);
+    if (force || rel > D.cueAngleDeg || (dist < D.cueDistance && R.chance(0.6)) || R.chance(0.25)) {
+      req.cue = sp.cue || 'footsteps';
+      if (req.delay <= 0) {
+        this._playCue(req);
+        req.delay = R.range(leadRange[0], leadRange[1]);
+      } else req.awaitingCue = true;
+    }
+  }
+
+  /**
+   * 아군·민간인 등장 요청 — 적과 같은 출현 지점·방식·예고음
+   * opts: { size(아군 분대 인원), nearEnemy(교전 중인 적 근처), distRange, spawnType, entrance, announce }
+   */
+  spawnAppearance(kind, opts = {}) {
+    const game = this.game;
+    let pickOpts = { distRange: opts.distRange };
+    // 위협 단계가 오를수록 교전 중인 적 근처에 섞여 나옴 (사선 위 민간인, 적과 근접 교전 중인 아군)
+    if (opts.nearEnemy !== false && R.chance(lerpThreat(CONFIG.director.mixNearEnemyChance, this.threat))) {
+      const engaged = game.npcs.byFaction('enemy').filter((e) => e.aware && e.hasLOS);
+      if (engaged.length) {
+        const e = R.pick(engaged);
+        pickOpts = { ...pickOpts, nearPos: e.position, nearRadius: kind === 'ally' ? 20 : 14 };
+      }
+    }
+    const typeKey = opts.spawnType || kind;
+    let sp = this.pickSpawnPoint(typeKey, pickOpts);
+    if (!sp && pickOpts.nearPos) sp = this.pickSpawnPoint(typeKey, { distRange: opts.distRange });
+    if (!sp) return null;
+    sp.lastUsed = game.time;
+    const pf = game.player.feet;
+    const req = {
+      kind,
+      type: kind === 'enemy' ? opts.enemyType || 'assault' : kind,
+      threat: this.threat,
+      spawnPoint: sp,
+      entrance: opts.entrance || appearanceEntrance(kind, sp.type),
+      goalNode: sp.goalNode,
+      goalNodes: sp.goalNodes,
+      bearing: Math.atan2(sp.z - pf.z, sp.x - pf.x),
+      delay: opts.extraDelay || 0,
+      size: opts.size || 1,
+      announce: opts.announce,
+      ambush: !!opts.ambush,
+      initial: !!opts.initial, // 시작 시 미리 배치 (출현 비율 집계에서 제외)
+      cue: null,
+    };
+    if (!opts.noCue) this._applyCue(req, sp, opts.cueLead, opts.forceCue);
+    this.pending.push(req);
     return req;
   }
 
@@ -309,22 +416,30 @@ export class SpawnDirector {
     if (!game.player.alive) return;
     // 생성 직전 재확인: 그새 시야에 들어왔으면 근처의 다른 숨은 지점으로
     let sp = req.spawnPoint;
-    if (this.isSpawnVisible(sp, req.entrance)) {
-      sp = this.pickSpawnPoint(req.type, { nearPos: sp, sameType: sp.type });
+    if (this.isSpawnVisible(sp, req.entrance === 'ambush' ? 'walkOut' : req.entrance)) {
+      const typeKey = req.ambush ? 'ambush' : req.kind === 'enemy' ? req.type : req.kind;
+      sp = this.pickSpawnPoint(typeKey, { nearPos: sp, sameType: sp.type, distRange: req.ambush ? [CONFIG.director.ambush.minDist, CONFIG.director.ambush.maxDist + 3] : undefined });
       if (!sp) return;
       req.spawnPoint = sp;
       req.goalNode = sp.goalNode;
       req.goalNodes = sp.goalNodes;
-      req.entrance = entranceFor(sp.type);
+      if (!req.ambush) req.entrance = req.kind === 'enemy' ? entranceFor(sp.type) : appearanceEntrance(req.kind, sp.type);
     }
-    if (this.activeHostiles() >= this.cap) return;
-    const make = this.factories.get(req.kind);
+    const kind = req.kind;
+    if (this.activeCount(kind) + (kind === 'ally' ? req.size - 1 : 0) >= this.capFor(kind)) return;
+    const make = this.factories.get(kind);
     if (!make) return;
     const npc = make(req);
     if (!npc) return;
     for (const p of this.populations) if (p.onSpawned) p.onSpawned(npc, req);
-    this.spawnLog.push({ t: game.time, type: req.type, sp: sp.type, x: sp.x, z: sp.z, cue: req.cue });
-    if (this.spawnLog.length > 60) this.spawnLog.shift();
+    const n = kind === 'ally' ? req.size : 1;
+    if (!req.initial && this.appearances[kind] != null) this.appearances[kind] += n;
+    if (req.ambush && this.ambushCount[kind] != null) {
+      this.ambushCount[kind]++;
+      game.events.emit(Events.AMBUSH, { kind, spawnPoint: sp, npc });
+    }
+    this.spawnLog.push({ t: game.time, kind, type: req.type, sp: sp.type, x: sp.x, z: sp.z, cue: req.cue, ambush: req.ambush });
+    if (this.spawnLog.length > 80) this.spawnLog.shift();
   }
 
   // ------------------------------------------------------------------
@@ -348,9 +463,11 @@ export class SpawnDirector {
       const dy = sp.y - pf.y;
       const d = Math.hypot(dx, dz);
       const indoor = sp.type === 'room' || sp.type === 'doorway' || sp.type === 'window';
-      const minD = indoor ? D.minIndoorSpawnDist : D.minSpawnDist;
-      if (d < minD || d > D.maxSpawnDist) continue;
-      if (opts.nearPos && Math.hypot(sp.x - opts.nearPos.x, sp.z - opts.nearPos.z) > 16) continue;
+      const minD = opts.distRange ? opts.distRange[0] : indoor ? D.minIndoorSpawnDist : D.minSpawnDist;
+      const maxD = opts.distRange ? opts.distRange[1] : D.maxSpawnDist;
+      if (d < minD || d > maxD) continue;
+      if (opts.distRange && Math.abs(dy) > 1.5) continue; // 근거리 등장은 같은 층에서만
+      if (opts.nearPos && Math.hypot(sp.x - opts.nearPos.x, sp.z - opts.nearPos.z) > (opts.nearRadius || 16)) continue;
       // 플레이어와 같은 방이면 제외
       if (playerIndoor && playerIndoor.room && sp.buildingId === playerIndoor.building.id && Math.abs(dy) < 1.5 && d < 9) continue;
       // 다른 NPC 근처 제외
@@ -404,6 +521,7 @@ export class SpawnDirector {
         const sp = list[i].sp;
         if (!this.isSpawnVisible(sp, entranceFor(sp.type))) return sp;
       }
+
     }
     return null;
   }
@@ -454,6 +572,13 @@ export class SpawnDirector {
       intensity: this.intensity,
       nextLevelIn: CONFIG.threat.secondsPerLevel - (this.elapsed % CONFIG.threat.secondsPerLevel),
       lastSpawns: this.spawnLog.slice(-4),
+      counts: { enemy: this.activeCount('enemy'), ally: this.activeCount('ally'), civilian: this.activeCount('civilian') },
+      caps: { enemy: this.cap, ally: CONFIG.ally.maxActive, civilian: CONFIG.civilian.maxActive },
+      appearances: { ...this.appearances },
+      ambushCount: { ...this.ambushCount },
+      credits: { ...this.credits },
+      nextAmbush: this.ambush.timer,
+      civPanic: this.civPanicT,
     };
   }
 }
@@ -464,6 +589,17 @@ function lerpWeights(level) {
   const out = {};
   for (const k of Object.keys(a)) out[k] = a[k] + (b[k] - a[k]) * t;
   return out;
+}
+
+// 아군·민간인 등장 방식 (출현 지점 종류별)
+export function appearanceEntrance(kind, spType) {
+  if (kind === 'civilian') {
+    if (spType === 'window') return 'window';
+    if (spType === 'room') return 'room';
+    if (spType === 'behindCover') return 'coverPop';
+    return R.chance(0.35) ? 'flee' : 'cross'; // 문·골목에서 뛰어나와 길을 건너 숨거나, 짐 들고 대피
+  }
+  return 'walkOut';
 }
 
 export function entranceFor(spType) {

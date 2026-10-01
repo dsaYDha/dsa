@@ -243,6 +243,76 @@ export class AudioSystem {
     this._noiseBurst(out, t, { dur: 0.03, gain: 0.5, type: 'highpass', freq: 3000, q: 0.5 });
   }
 
+  // 아군 소총 (직선 탄창 소총 — 조금 더 날카로운 음색, 같은 거리감)
+  allyGunshot(pos) {
+    if (!this.ready) return;
+    const t = this.now;
+    const d = this._dist(pos);
+    const out = this._spatial(pos, { ref: 6, rolloff: 0.9, reverb: Math.min(1.2, 0.3 + d / 40) });
+    this._noiseBurst(out, t, { dur: 0.12, gain: 0.9, type: 'bandpass', freq: rand(1100, 1500), q: 0.7 });
+    this._tone(out, t, { f0: 160, f1: 55, dur: 0.1, gain: 0.7 });
+    this._noiseBurst(out, t, { dur: 0.03, gain: 0.55, type: 'highpass', freq: 3600, q: 0.5 });
+  }
+
+  // 무전 잡음 (콜아웃 앞)
+  radioClick() {
+    if (!this.ready) return;
+    const t = this.now;
+    this._noiseBurst(this.ui, t, { dur: 0.09, gain: 0.12, type: 'bandpass', freq: 2200, q: 3 });
+    this._tone(this.ui, t, { f0: 1600, dur: 0.03, gain: 0.04, type: 'square' });
+  }
+
+  // 비명 (위치 사운드) — 톱니파 + 비브라토 + 포먼트 필터
+  scream(pos, elder = false) {
+    if (!this.ready || this._dist(pos) > 45) return;
+    const ctx = this.ctx;
+    const t = this.now;
+    const out = this._spatial(pos, { ref: 4, rolloff: 1.0, reverb: 0.4 });
+    const dur = rand(0.55, 0.95);
+    const base = elder ? rand(260, 380) : rand(420, 720);
+    const o = ctx.createOscillator();
+    o.type = 'sawtooth';
+    o.frequency.setValueAtTime(base * 0.85, t);
+    o.frequency.linearRampToValueAtTime(base * 1.15, t + dur * 0.3);
+    o.frequency.linearRampToValueAtTime(base * 0.8, t + dur);
+    const lfo = ctx.createOscillator();
+    lfo.frequency.value = rand(6, 9);
+    const lg = ctx.createGain();
+    lg.gain.value = base * 0.05;
+    lfo.connect(lg).connect(o.frequency);
+    const f1 = ctx.createBiquadFilter();
+    f1.type = 'bandpass';
+    f1.frequency.value = rand(900, 1300);
+    f1.Q.value = 3;
+    const g = ctx.createGain();
+    g.gain.setValueAtTime(0.0001, t);
+    g.gain.exponentialRampToValueAtTime(0.5, t + 0.05);
+    g.gain.setValueAtTime(0.5, t + dur * 0.7);
+    g.gain.exponentialRampToValueAtTime(0.0001, t + dur);
+    o.connect(f1).connect(g).connect(out);
+    o.start(t);
+    lfo.start(t);
+    o.stop(t + dur + 0.05);
+    lfo.stop(t + dur + 0.05);
+  }
+
+  // 오인 사격 경고음 — 사살음과 확실히 다른 거친 버저
+  friendlyFire(killed) {
+    if (!this.ready) return;
+    const t = this.now;
+    this._tone(this.ui, t, { f0: 110, dur: killed ? 0.55 : 0.32, gain: 0.32, type: 'square' });
+    this._tone(this.ui, t, { f0: 117, dur: killed ? 0.55 : 0.32, gain: 0.28, type: 'square' });
+    this._tone(this.ui, t + 0.02, { f0: 220, f1: 150, dur: 0.25, gain: 0.12, type: 'sawtooth' });
+  }
+
+  // 민간인 대피 성공 — 부드러운 짧은 알림
+  evacChime() {
+    if (!this.ready) return;
+    const t = this.now;
+    this._tone(this.ui, t, { f0: 660, dur: 0.18, gain: 0.07, type: 'sine' });
+    this._tone(this.ui, t + 0.1, { f0: 990, dur: 0.22, gain: 0.06, type: 'sine' });
+  }
+
   dryFire() {
     if (!this.ready) return;
     const t = this.now;

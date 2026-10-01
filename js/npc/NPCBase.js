@@ -4,8 +4,9 @@
 import * as THREE from 'three';
 import { CONFIG } from '../config.js';
 import { Events } from '../core/EventBus.js';
-import { HumanoidRig, defaultOutfit } from './HumanoidRig.js';
+import { HumanoidRig } from './HumanoidRig.js';
 import { Insignia } from './Insignia.js';
+import { soldierOutfit, civilianOutfit, describeEquipment } from './Outfits.js';
 
 let NEXT_ID = 1;
 const _v = new THREE.Vector3();
@@ -29,7 +30,7 @@ export class NPCBase {
     this.targetYaw = 0;
 
     const fac = CONFIG.factions[this.apparentFaction];
-    this.rig = new HumanoidRig(opts.outfit || defaultOutfit(fac));
+    this.rig = new HumanoidRig(opts.outfit || (fac.uniform != null ? soldierOutfit(this.apparentFaction) : civilianOutfit()));
     this.insignia = new Insignia(fac.insignia);
     this.insignia.attach(this.rig);
     this.root = this.rig.root;
@@ -60,7 +61,37 @@ export class NPCBase {
     this.aimPitch = 0;
     this.deathT = 0;
     this.lastDamage = null;
+    this.handsUp = 0; // 0~1 손 들기
+    this.cower = 0; // 0~1 머리 감싸고 웅크림
+    this.playerDamaged = false; // 플레이어에게 한 번이라도 맞았는지 (어시스트 판정)
+    this._yieldT = 0;
+    // 음성 프로필 (자막·TTS 화자별 음높이·속도)
+    this.voice = { id: `npc${this.id}`, pitch: 0.85 + ((this.id * 37) % 40) / 100, rate: 1.0 + ((this.id * 53) % 25) / 100 };
   }
+
+  // 장비 구성 데이터 (헬멧·소총·신발·표식·손 상태) — 3단계 시각 단서 판정용
+  getEquipment() {
+    return describeEquipment(this);
+  }
+
+  // 손 상태: 'weapon' | 'aiming' | 'raised' | 'covering' | 'carrying' | 'empty'
+  handsState() {
+    if (this.handsUp > 0.5) return 'raised';
+    if (this.cower > 0.5) return 'covering';
+    if (this.rig.outfit.rifle) return this.aim > 0.5 ? 'aiming' : 'weapon';
+    if (this.rig.outfit.bag === 'carry') return 'carrying';
+    return 'empty';
+  }
+
+  // 적대 판정 (trueFaction 기준). 3단계 위장 적 예외는 여기서 확장
+  isHostileTo(other) {
+    const a = this.trueFaction;
+    const b = other === 'player' ? 'ally' : other.trueFaction;
+    return (a === 'enemy' && b === 'ally') || (a === 'ally' && b === 'enemy');
+  }
+
+  // 근처를 지나간 탄 (제압) — 서브클래스가 필요하면 반응
+  onSuppressed() {}
 
   // 3단계: 겉보기 소속 변경 (표식 색·형태 교체, 필요하면 복장도 교체)
   setApparentFaction(faction, outfit = null) {
@@ -147,6 +178,11 @@ export class NPCBase {
     const dx = target.x - this.position.x;
     const dz = target.z - this.position.z;
     const dist = Math.hypot(dx, dz);
+    // 앞에 다른 NPC 가 있으면 감속 (겹쳐 지나가지 않게, 1.5초 넘게 막히면 그냥 지나감)
+    if (dist > 0.01 && this.game.npcs.isBlockedAhead(this, dx / dist, dz / dist)) {
+      this._yieldT += dt;
+      if (this._yieldT < 1.5) speed *= 0.2;
+    } else this._yieldT = 0;
     const step = speed * dt;
     // 높이: 구간 시작점 → 목표 노드 사이를 수평 진행률로 보간 (계단 경사와 일치)
     const segLen = Math.max(0.01, Math.hypot(target.x - this.segFrom.x, target.z - this.segFrom.z));
@@ -201,6 +237,7 @@ export class NPCBase {
     if (!this.alive) return;
     const dmg = info.amount;
     this.health -= dmg;
+    if (info.attacker === 'player') this.playerDamaged = true;
     const headshot = info.zone === 'head';
     const payload = {
       attacker: info.attacker,
@@ -209,6 +246,8 @@ export class NPCBase {
       apparentFaction: this.apparentFaction,
       zone: info.zone,
       headshot,
+      attackerFaction: info.attacker === 'player' ? 'player' : info.attacker ? info.attacker.trueFaction : null,
+      victimKind: this.kind,
       damage: dmg,
       distance: info.distance,
       timeSinceFirstSeen: this.firstSeenAt != null ? this.game.time - this.firstSeenAt : null,
@@ -239,6 +278,7 @@ export class NPCBase {
     this.dying = true;
     this.health = 0;
     this.deathT = 0;
+    this.killedBy = info ? info.attacker : null;
     // 총알이 온 방향으로 넘어짐: 앞에서 맞으면 뒤로
     let dir = 1;
     if (info && info.direction) {
@@ -276,7 +316,7 @@ export class NPCBase {
 
     this.root.position.copy(this.position);
     this.root.rotation.y = this.yaw;
-    this.rig.animate(dt, { speed: this.curSpeed, aim: this.aim, aimPitch: this.aimPitch, crouch: this.crouch });
+    this.rig.animate(dt, { speed: this.curSpeed, aim: this.aim, aimPitch: this.aimPitch, crouch: this.crouch, handsUp: this.handsUp, cower: this.cower });
   }
 
   think() {}

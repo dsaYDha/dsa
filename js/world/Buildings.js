@@ -389,6 +389,12 @@ export function buildEnterable(ctx, spec) {
     }
   }
 
+  // 가구 위치 (민간인이 가구 옆에 웅크려 숨는 지점 계산용)
+  building.furniture = furn.map(([k, cu, cv]) => {
+    const [x, z] = Fr.toWorld(cu, cv);
+    return { x, y: k * H, z, floor: k };
+  });
+
   // --- 옥상 잡동사니 ---
   if (rng.chance(0.7)) {
     const y = F * H;
