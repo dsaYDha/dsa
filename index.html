@@ -1,0 +1,154 @@
+<!doctype html>
+<html lang="ko">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>피아식별</title>
+  <meta name="description" content="전쟁 중인 도심 시가지를 배경으로 한 브라우저 1인칭 시가전" />
+  <link rel="stylesheet" href="css/style.css" />
+  <!-- Three.js 는 CDN 에서 버전 고정으로 불러온다 (번들러 없음) -->
+  <script type="importmap">
+    {
+      "imports": {
+        "three": "https://cdn.jsdelivr.net/npm/three@0.170.0/build/three.module.js",
+        "three/addons/": "https://cdn.jsdelivr.net/npm/three@0.170.0/examples/jsm/"
+      }
+    }
+  </script>
+</head>
+<body>
+  <div id="app">
+    <!-- 게임 HUD -->
+    <div id="hud" class="hidden">
+      <div id="vignette"></div>
+      <div id="lowhp"></div>
+      <div id="ff-flash"></div>
+      <div id="damage-dirs"></div>
+
+      <div id="crosshair">
+        <i class="ch t"></i><i class="ch b"></i><i class="ch l"></i><i class="ch r"></i><i class="dot"></i>
+      </div>
+      <div id="hitmarker"><i></i><i></i><i></i><i></i></div>
+      <div id="killmarker"><i></i><i></i><i></i><i></i><b></b></div>
+      <div id="ffmarker"><b></b><i></i></div>
+      <div id="popups"></div>
+      <div id="ff-warning"></div>
+
+      <div id="hud-top-left">
+        <div id="hud-threat">위협 단계 1</div>
+        <div id="hud-threat-pips"></div>
+        <div id="hud-warnings"><span class="lbl">경고</span><span id="hud-warn-pips"></span><span id="hud-warn-text">0/3</span></div>
+      </div>
+      <div id="hud-top-center">
+        <div id="hud-time">00:00</div>
+        <div id="compass"><div id="compass-strip"></div><i class="needle"></i></div>
+        <div id="hud-combo">
+          <span id="hud-combo-label">콤보</span>
+          <span id="hud-combo-mul">×1.0</span>
+          <div class="bar"><div id="hud-combo-bar"></div></div>
+        </div>
+        <div id="hud-combo-lock">콤보 잠금 <b id="hud-combo-lock-t">0</b>초</div>
+      </div>
+      <div id="hud-top-right">
+        <div id="hud-score">0</div>
+        <div id="hud-kills">사살 0</div>
+        <div id="killfeed"></div>
+      </div>
+
+      <div id="hud-bottom-left">
+        <div class="label">체력</div>
+        <div class="hp"><div id="hud-hp-fill"></div><span id="hud-hp-text">100</span></div>
+      </div>
+      <div id="hud-bottom-right">
+        <div id="hud-weapon">AR</div>
+        <div class="ammo"><span id="hud-ammo">30</span><span id="hud-ammo-reserve">/ ∞</span></div>
+        <div id="hud-reload">재장전 중<div class="bar"><div id="hud-reload-bar"></div></div></div>
+        <div id="hud-flashlight">손전등 F</div>
+      </div>
+      <div id="banner"></div>
+      <div id="hud-hint"></div>
+      <div id="subtitles"></div>
+    </div>
+
+    <!-- 로딩 -->
+    <div id="screen-loading" class="screen">
+      <div class="panel small">
+        <h1 class="title">피아식별</h1>
+        <p id="loading-text">불러오는 중…</p>
+      </div>
+    </div>
+
+    <!-- 시작 화면 -->
+    <div id="screen-start" class="screen hidden">
+      <div class="panel">
+        <h1 class="title">피아식별</h1>
+        <p class="subtitle">전쟁 중인 도심 시가지 — 1인칭 시가전</p>
+        <p class="story">양측 군복은 거의 같다. 몸에 붙인 <span class="red">빨간 표식</span>(완장·헬멧 띠)이 적,
+          <span class="blue">파란 표식</span>이 아군, 표식 없는 사복은 민간인이다.
+          튀어나온 인물이 누구인지 <b>표식을 확인하고</b> 쏴라. 아군·민간인을 쏘면 큰 감점과 경고 —
+          경고 3회면 작전 해임이다.</p>
+        <div class="controls">
+          <div><kbd>마우스</kbd> 시점</div>
+          <div><kbd>W A S D</kbd> 이동</div>
+          <div><kbd>Shift</kbd> 달리기</div>
+          <div><kbd>C</kbd> 앉기</div>
+          <div><kbd>Space</kbd> 점프</div>
+          <div><kbd>좌클릭</kbd> 사격</div>
+          <div><kbd>우클릭</kbd> 정조준</div>
+          <div><kbd>R</kbd> 재장전</div>
+          <div><kbd>F</kbd> 손전등</div>
+          <div><kbd>Esc</kbd> 일시정지</div>
+          <div><kbd>`</kbd> 디버그</div>
+        </div>
+        <div class="seed-row">
+          <label for="seed-input">맵 시드</label>
+          <input id="seed-input" type="text" maxlength="40" spellcheck="false" autocomplete="off" />
+          <button id="btn-seed-random" class="ghost" type="button">무작위</button>
+        </div>
+        <button id="btn-start" class="primary" type="button">작전 개시</button>
+        <p id="best-record" class="best"></p>
+        <p class="tip">헤드폰 권장 — 측면·후방의 적은 발소리·문 소리로 먼저 들린다</p>
+      </div>
+    </div>
+
+    <!-- 일시정지 -->
+    <div id="screen-pause" class="screen hidden">
+      <div class="panel">
+        <h2>일시정지</h2>
+        <p id="pause-note" class="note"></p>
+        <div class="settings">
+          <label>마우스 감도 <span id="set-sens-val"></span><input id="set-sens" type="range" /></label>
+          <label>시야각 (FOV) <span id="set-fov-val"></span><input id="set-fov" type="range" /></label>
+          <label>볼륨 <span id="set-vol-val"></span><input id="set-vol" type="range" /></label>
+          <label class="check"><input id="set-speech" type="checkbox" /> 무전·외침 음성 읽기 (TTS) <span id="set-speech-note"></span></label>
+        </div>
+        <div class="buttons">
+          <button id="btn-resume" class="primary" type="button">계속하기</button>
+          <button id="btn-menu" class="ghost" type="button">처음으로</button>
+        </div>
+        <p class="tip click-resume">화면을 클릭하면 복귀합니다</p>
+      </div>
+    </div>
+
+    <!-- 결과 -->
+    <div id="screen-result" class="screen hidden">
+      <div class="panel">
+        <h2 id="result-title">전사</h2>
+        <p id="result-reason" class="reason"></p>
+        <div id="result-stats" class="stats"></div>
+        <p id="result-best" class="best"></p>
+        <div class="buttons">
+          <button id="btn-restart" class="primary" type="button">다시 시작</button>
+          <button id="btn-result-menu" class="ghost" type="button">처음으로</button>
+        </div>
+      </div>
+    </div>
+
+    <div id="debug-overlay" class="hidden"></div>
+    <div id="debug-labels" class="hidden"></div>
+    <div id="error-box" class="hidden"></div>
+    <noscript><div class="noscript">JavaScript 가 필요합니다.</div></noscript>
+  </div>
+  <script type="module" src="js/main.js"></script>
+</body>
+</html>
