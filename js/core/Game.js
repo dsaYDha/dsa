@@ -15,6 +15,7 @@ import { NPCManager } from '../npc/NPCManager.js';
 import { SpawnDirector } from '../director/SpawnDirector.js';
 import { ScoreSystem } from '../game/ScoreSystem.js';
 import { PenaltySystem } from '../game/PenaltySystem.js';
+import { ObservationSystem } from '../game/Observation.js';
 import { Combat } from '../game/Combat.js';
 import { VoiceSystem } from '../dialogue/VoiceSystem.js';
 import { HUD } from '../ui/HUD.js';
@@ -125,6 +126,7 @@ export class Game {
     this.director = new SpawnDirector(this);
     this.score = new ScoreSystem(this);
     this.penalty = new PenaltySystem(this);
+    this.observation = new ObservationSystem(this);
     this.hud = new HUD(this);
 
     // 총기 손전등 (월드 조명, 세기만 조절 — 광원 수 고정)
@@ -180,6 +182,7 @@ export class Game {
     this.director.reset();
     this.score.reset();
     this.penalty.reset();
+    this.observation.reset();
     this.voice.clear();
     this.weapon.reset();
     this.hud.reset();
@@ -265,6 +268,8 @@ export class Game {
     const r = this.score.result(this.runTime);
     r.accuracy = this.weapon.shotsFired ? this.weapon.shotsHit / this.weapon.shotsFired : 0;
     Object.assign(r, this.penalty.stats());
+    r.anomaliesFound = this.observation.anomaliesFound;
+    r.factsFound = this.observation.factsFound;
     r.reason = this.endReason || 'killed';
     const updated = this.records.submit(r);
     this.lastResult = r;
@@ -283,6 +288,8 @@ export class Game {
     this.state = 'menu';
     this.input.exitLock();
     this.input.captureKeys = false;
+    this.observation.reset();
+    this.audio.setFocus(0);
     this.npcs.clear();
     this.effects.clear();
     this.voice.clear();
@@ -341,24 +348,37 @@ export class Game {
     this.time += dt;
     this.runTime += dt;
     const p = this.player;
+    this.observation.update(dt, this.input); // 관찰 모드 먼저 (이동·감도·사격 가능 여부에 반영)
     p.update(dt, this.input, this.weapon);
     this.weapon.update(dt, this.input, p);
-    const fov = this.settings.fov * (1 - this.weapon.adsT * (1 - CONFIG.weapon.adsFovMul));
-    if (Math.abs(this.camera.fov - fov) > 0.01) {
-      this.camera.fov = fov;
-      this.camera.updateProjectionMatrix();
-    }
+    this._updateFov();
     this.npcs.update(dt);
     this.director.update(dt);
     this.score.update(dt);
     this.voice.update(dt);
     this._updateCommon(dt);
-    this.audio.updateHeartbeat(p.health < CONFIG.player.maxHealth * 0.3, this.time);
+    const obs = this.observation;
+    this.audio.setFocus(obs.t * CONFIG.observe.ambientDuck * 2);
+    this.audio.updateHeartbeat(p.health < CONFIG.player.maxHealth * 0.3 || obs.active, this.time, obs.active && p.health >= CONFIG.player.maxHealth * 0.3);
+  }
+
+  // 시야각: 정조준 축소 + 관찰 모드 확대(약 2배)
+  _updateFov() {
+    const ads = this.settings.fov * (1 - this.weapon.adsT * (1 - CONFIG.weapon.adsFovMul));
+    const zoom = 1 + (CONFIG.observe.zoom - 1) * (this.observation ? this.observation.t : 0);
+    const fov = THREE.MathUtils.radToDeg(2 * Math.atan(Math.tan(THREE.MathUtils.degToRad(ads) / 2) / zoom));
+    if (Math.abs(this.camera.fov - fov) > 0.01) {
+      this.camera.fov = fov;
+      this.camera.updateProjectionMatrix();
+    }
   }
 
   _updateDead(dt) {
     this.time += dt;
     this._deadT += dt;
+    this.observation.update(dt, this.input);
+    this._updateFov();
+    this.audio.setFocus(0);
     // 전사면 쓰러지는 시점, 해임이면 그대로 멈춤
     if (this.endReason === 'killed') this.player.update(dt, this.input, this.weapon);
     this.npcs.update(dt);

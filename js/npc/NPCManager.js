@@ -1,5 +1,5 @@
-// NPC 관리 — 생성(적·아군 분대·민간인)·갱신·제거, 부위별 히트박스 레이캐스트, 엄폐/창가/은신/대피 지점 선택,
-// 플레이어 화면 노출 추적(firstSeenAt), 조준 중인 NPC 질의(4단계 말 걸기용), 진영별 목록, 청각(총성)·공황 전파
+// NPC 관리 — 생성(적·아군 분대·민간인·위장 적)·갱신·제거, 부위별 히트박스 레이캐스트, 엄폐/창가/은신/대피 지점 선택,
+// 플레이어 화면 노출 추적(firstSeenAt), 조준 중인 NPC 질의(4단계 말 걸기용), 진영별 목록(진짜/겉보기), 청각(총성)·공황·무전 전파
 import * as THREE from 'three';
 import { CONFIG } from '../config.js';
 import { Events } from '../core/EventBus.js';
@@ -8,6 +8,7 @@ import { AllySoldier } from './AllySoldier.js';
 import { AllySquad } from './AllySquad.js';
 import { CivilianNPC } from './CivilianNPC.js';
 import { ZONES } from './HumanoidRig.js';
+import { rollDisguiseProfile, disguiseOutfit } from './Disguise.js';
 import { gameRand as R } from '../core/Random.js';
 
 const _ray = new THREE.Raycaster();
@@ -27,7 +28,8 @@ export class NPCManager {
     this._playerNode = null;
     this._playerNodeT = 0;
     this.squads = [];
-    this.factions = { enemy: [], ally: [], civilian: [] };
+    this.factions = { enemy: [], ally: [], civilian: [] }; // 진짜 소속 (trueFaction)
+    this.apparent = { enemy: [], ally: [], civilian: [] }; // 겉보기 소속 — 아군·민간인 AI 는 이것만 본다
     this._aimT = 0;
     this._evacNodes = null;
     game.events.on(Events.WEAPON_FIRED, (e) => {
@@ -37,23 +39,44 @@ export class NPCManager {
       for (const n of this.list) {
         if (!n.alive) continue;
         const d2 = n.position.distanceToSquared(e.position);
-        if (e.isPlayer && n.trueFaction === 'enemy' && d2 < r2) n.hearShot(e.position);
+        if (n.disguised) {
+          // 위장 중인 적: 민간인처럼 보이면 총성에 웅크리는 척하거나(성향에 따라) 웅크리지 않음
+          if (d2 < c2 && e.shooter !== n) n.onGunfire(e.position, Math.sqrt(d2));
+        } else if (e.isPlayer && n.trueFaction === 'enemy' && d2 < r2) n.hearShot(e.position);
         else if (n.trueFaction === 'civilian' && d2 < c2 && e.shooter !== n) n.hearDanger(e.position, Math.sqrt(d2));
       }
     });
   }
 
-  // 진영별 생존 목록 (프레임마다 갱신)
+  // 진영별 생존 목록 (프레임마다 갱신) — 진짜 소속
   byFaction(f) {
     return this.factions[f] || [];
   }
 
+  // 겉보기 소속별 생존 목록 (위장 적은 ally/civilian 쪽에 들어감)
+  byApparent(f) {
+    return this.apparent[f] || [];
+  }
+
   _rebuildFactions() {
     const F = this.factions;
-    F.enemy.length = 0;
-    F.ally.length = 0;
-    F.civilian.length = 0;
-    for (const n of this.list) if (n.alive && F[n.trueFaction]) F[n.trueFaction].push(n);
+    const A = this.apparent;
+    for (const k of ['enemy', 'ally', 'civilian']) {
+      F[k].length = 0;
+      A[k].length = 0;
+    }
+    for (const n of this.list) {
+      if (!n.alive) continue;
+      if (F[n.trueFaction]) F[n.trueFaction].push(n);
+      if (A[n.apparentFaction]) A[n.apparentFaction].push(n);
+    }
+  }
+
+  // 아군 위치 콜아웃이 주변(플레이어 40m 안)의 아군 표식 인물에게 들림 — 반응하는지가 행동 단서
+  broadcastRadio(squad, enemy) {
+    for (const n of this.apparent.ally) {
+      if (n.onRadioCallout && n.squad !== squad) n.onRadioCallout(enemy, squad);
+    }
   }
 
   // 진행 방향 바로 앞에 다른 NPC 가 있는지 (겹쳐 지나가지 않게 감속)
@@ -103,15 +126,65 @@ export class NPCManager {
     return this._add(npc, sp);
   }
 
+  /**
+   * 위장 적 생성 (3단계) — 겉보기는 아군(파란 표식)이나 민간인(사복), 진짜 소속은 적
+   * @param {object} o { as: 'ally'|'civilian', spawnPoint, entrance, goalNode, threat, profile?, role?, infiltrate?, fromEnemySide? }
+   */
+  spawnDisguised(o) {
+    const game = this.game;
+    const sp = o.spawnPoint;
+    const profile = o.profile || rollDisguiseProfile(o.as, o.threat || game.director.threat, { role: o.role, infiltrate: o.infiltrate, fromEnemySide: o.fromEnemySide });
+    const npc = new EnemySoldier(game, {
+      type: o.as === 'civilian' ? 'assault' : R.chance(0.5) ? 'assault' : 'rifleman',
+      threat: o.threat || game.director.threat,
+      entrance: o.entrance,
+      nodeId: sp.nodeId,
+      goalNode: o.goalNode,
+      buildingId: sp.buildingId,
+      apparentFaction: profile.as,
+      outfit: disguiseOutfit(profile),
+      disguise: profile,
+    });
+    if (profile.gear.includes('tapeBand')) {
+      npc.insignia.setColor(CONFIG.insignia.tapeColor);
+      npc.insignia.setShape('tape');
+    }
+    npc.lastKnown.copy(game.player.feet);
+    this._add(npc, sp);
+    this._noteSpawnSide(npc);
+    game.events.emit(Events.DISGUISE_SPAWNED, { npc, profile });
+    return npc;
+  }
+
+  // 아군 표식 인물이 적이 있던 쪽(교전 중인 빨간 표식 25m 안)에서 나타났으면 기록 — 진짜 아군도 마찬가지
+  _noteSpawnSide(npc) {
+    if (npc.apparentFaction !== 'ally') return;
+    for (const e of this.apparent.enemy) {
+      if (e.position.distanceToSquared(npc.position) < 25 * 25 && (e.aware || e.visibleToPlayer)) {
+        npc.noteBehavior('fromEnemySide');
+        return;
+      }
+    }
+  }
+
   // 아군 분대 (2~4명): 리더는 출현 지점, 나머지는 근처 숨은 노드에서 등장
+  // decoy: 'straggler'(1인 낙오병 — 플레이어에게 다가와 합류) | 'escort'(도착 뒤 분대원 하나가 동행 엄호)
   spawnAllySquad(o) {
     const game = this.game;
     const sp = o.spawnPoint;
-    const size = Math.max(1, o.size || 3);
+    const size = o.decoy === 'straggler' ? 1 : Math.max(1, o.size || 3);
     const squad = new AllySquad(game);
     const leader = new AllySoldier(game, { nodeId: sp.nodeId, entrance: o.entrance, squad });
     squad.add(leader);
     this._add(leader, sp);
+    this._noteSpawnSide(leader);
+    if (o.decoy === 'straggler') {
+      squad.straggler = true;
+      leader.startJoin();
+      this.squads.push(squad);
+      return leader;
+    }
+    if (o.decoy === 'escort') squad.escortDecoyT = R.range(4, 9);
     const nav = game.world.nav;
     const near = nav.inRadius(sp.x, sp.y, sp.z, 6, (n) => n.id !== sp.nodeId && Math.abs(n.y - sp.y) < 1 && n.indoor === nav.get(sp.nodeId).indoor);
     R.shuffle(near);
@@ -124,6 +197,7 @@ export class NPCManager {
       const idx = near.indexOf(n);
       if (idx >= 0) near.splice(idx, 1);
     }
+    for (const m of squad.members) if (m !== leader) this._noteSpawnSide(m);
     this.squads.push(squad);
     if (o.entrance === 'ambush') {
       // 돌발 조우 아군: 잠깐 뒤에야 "아군이다!" (판단을 시험하기 위해 바로 외치지 않음)
@@ -132,9 +206,10 @@ export class NPCManager {
     return leader;
   }
 
+  // decoy: 'frozen'(총성에 얼어붙음) | 'helpSeeker'(도와달라며 다가옴) — 오판 유도용 진짜 행동
   spawnCivilian(o) {
     const sp = o.spawnPoint;
-    const npc = new CivilianNPC(this.game, { nodeId: sp.nodeId, entrance: o.entrance, goalNode: o.goalNode, buildingId: sp.buildingId });
+    const npc = new CivilianNPC(this.game, { nodeId: sp.nodeId, entrance: o.entrance, goalNode: o.goalNode, buildingId: sp.buildingId, decoy: o.decoy });
     return this._add(npc, sp);
   }
 
@@ -145,6 +220,7 @@ export class NPCManager {
     this.scene.add(npc.root);
     this.list.push(npc);
     if (this.factions[npc.trueFaction]) this.factions[npc.trueFaction].push(npc);
+    if (this.apparent[npc.apparentFaction]) this.apparent[npc.apparentFaction].push(npc);
     this.game.events.emit(Events.NPC_SPAWNED, { npc, spawnPoint: sp });
     return npc;
   }
@@ -156,6 +232,7 @@ export class NPCManager {
     }
     this.list.length = 0;
     this.squads.length = 0;
+    for (const k of ['enemy', 'ally', 'civilian']) this.apparent[k].length = 0;
     this._rebuildFactions();
     for (const node of this.game.world.nav.nodes) node.reservedBy = null;
     this._evacNodes = null;
@@ -164,6 +241,13 @@ export class NPCManager {
   countActive(faction = 'enemy') {
     let c = 0;
     for (const n of this.list) if (n.alive && n.trueFaction === faction) c++;
+    return c;
+  }
+
+  // 정체를 드러내기 전의 위장 적 수
+  countDisguised() {
+    let c = 0;
+    for (const n of this.list) if (n.alive && n.disguised) c++;
     return c;
   }
 
@@ -301,15 +385,17 @@ export class NPCManager {
     return best;
   }
 
-  // 플레이어가 가까이서 민간인을 조준하면 반응 (0.1초 주기)
+  // 플레이어가 가까이서 민간인(처럼 보이는 인물)을 총으로 겨누면 반응 (0.1초 주기) — 관찰 모드(총을 내림)일 땐 반응 없음
   _updateAim(dt) {
     this._aimT -= dt;
     if (this._aimT > 0) return;
     const step = 0.1;
     this._aimT = step;
-    if (!this.factions.civilian.length || !this.game.player.alive) return;
+    const game = this.game;
+    if (!this.apparent.civilian.length || !game.player.alive) return;
+    if (game.observation && game.observation.weaponDown) return;
     const a = this.getAimedNPC({ maxDistance: CONFIG.civilian.aimReactDist, coneDeg: 4 });
-    if (a && a.npc.trueFaction === 'civilian' && a.npc.onAimedAt) a.npc.onAimedAt(step);
+    if (a && a.npc.apparentFaction === 'civilian' && a.npc.onAimedAt) a.npc.onAimedAt(step);
   }
 
   // 민간인 사망 → 주변 민간인 공황 (흩어져 도망) + 디렉터에 공황 시간 통보

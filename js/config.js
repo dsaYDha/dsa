@@ -4,7 +4,7 @@
 // 단위: 거리 m, 시간 초, 각도는 별도 표기가 없으면 '도(deg)'
 
 export const CONFIG = {
-  version: '0.2.0 (2단계: 피아 혼재·오인 사격)',
+  version: '0.3.0 (3단계: 위장 적·관찰)',
 
   // ------------------------------------------------------------------
   // 키 설정 (KeyboardEvent.code 기준 — 한글 IME 상태와 무관하게 동작)
@@ -20,12 +20,12 @@ export const CONFIG = {
     jump: ['Space'],
     reload: ['KeyR'],
     flashlight: ['KeyF'],
+    observe: ['KeyQ'], // 3단계: 관찰 모드 (누르고 있기)
     debug: ['Backquote'],
   },
-  // 이후 단계(관찰·대화)용으로 비워 둔 키 — 2단계에서도 어떤 기능에도 묶지 않음
+  // 4단계(말 걸기·문답)용으로 비워 둔 키 — 어떤 기능에도 묶지 않음
   reservedKeys: {
     interact: ['KeyE'], // 4단계: 말 걸기
-    observe: ['KeyQ'], // 3단계: 관찰 모드
     dialog1: ['Digit1'], dialog2: ['Digit2'], dialog3: ['Digit3'], dialog4: ['Digit4'], // 4단계: 문답 선택지
   },
   mouse: { fire: 0, aim: 2 }, // 0=좌클릭, 2=우클릭
@@ -163,13 +163,13 @@ export const CONFIG = {
     ally: { label: '아군', insignia: { color: 0x1f6dff, shape: 'band' }, uniform: 0x5b6142, vest: 0x3e4231 },
     civilian: { label: '민간인', insignia: null, uniform: null, vest: null }, // 사복 — 복장은 npc/Outfits.js 에서 무작위 조합
   },
-  insignia: { emissive: 1.35, armbandHeight: 0.13, helmetBandHeight: 0.07 },
+  insignia: { emissive: 1.35, armbandHeight: 0.13, helmetBandHeight: 0.07, tapeColor: 0x2c9dff }, // tapeColor: 위장 적의 급조 테이프 (진짜보다 하늘빛)
 
   // 장비 세트 — 진짜 적·아군은 항상 자기 진영 세트를 일관되게 갖춘다 (3단계 위장 판별의 기준)
   // 먼 거리에선 거의 구분되지 않고 가까이서만 보이는 차이
   gearSets: {
     enemy: { helmetStyle: 'enemy', rifleStyle: 'curved', footwear: 'combat' }, // 챙 있는 둥근 헬멧, 굽은 탄창·나무 개머리판
-    ally: { helmetStyle: 'ally', rifleStyle: 'straight', footwear: 'combat' }, // 낮고 넓은 헬멧(뒷목 가리개), 직선 탄창·검은 개머리판
+    ally: { helmetStyle: 'ally', rifleStyle: 'straight', footwear: 'combat', patch: 'shield' }, // 낮고 넓은 헬멧(뒷목 가리개), 직선 탄창·검은 개머리판, 어깨 파란 방패 패치
   },
 
   // ------------------------------------------------------------------
@@ -288,6 +288,71 @@ export const CONFIG = {
     maxWarnings: 3, // 누적 시 작전 해임 (게임 오버)
   },
 
+  // ------------------------------------------------------------------
+  // 3단계: 위장 적 — 가짜 아군(파란 표식) / 가짜 민간인(사복). trueFaction 은 enemy
+  // 장비 단서 = 확정 증거(진짜에겐 없음, 작고 가까이서만 보임), 행동 단서 = 의심 근거(진짜도 가끔 비슷하게 행동)
+  // [a, b] 쌍은 위협 단계 fromThreat → 최고 단계로 보간
+  // ------------------------------------------------------------------
+  disguise: {
+    fromThreat: 2, // 첫 1분(위협 1단계)엔 위장 적 없음
+    allyChance: [0.1, 0.3], // 아군처럼 보이는 등장 중 위장 적 비율
+    civilianChance: [0.1, 0.25], // 민간인처럼 보이는 등장 중 위장 적 비율
+    maxActive: [2, 3], // 동시 활성 위장 적 상한
+    gearClues: [[2, 3], [0, 1]], // 위장 적의 장비 단서 수 (초반 2~3개 → 후반 0~1개, 0개 = 완벽 위장)
+    behaviorTraits: [2, 3], // 행동 성향 수 (실제로 그 상황이 일어나야 단서가 됨)
+    scoutChance: { ally: 0.15, civilian: 0.55 }, // 정찰형 비율 (나머지는 기습형)
+    escortChance: 0.35, // 가짜 아군 기습형 중 '동행'으로 접근하는 비율
+    nearSquadChance: 0.6, // 가짜 아군이 기존 아군 분대 근처에서 등장할 확률
+    nearCiviliansChance: 0.6, // 가짜 민간인이 다른 민간인 근처에서 등장할 확률
+    assaultInfiltrate: [0.35, 0.6], // 습격 구간 시작 시 혼란을 틈탄 위장 적 접근 확률
+    blendTime: [6, 14], // 등장 후 섞여 있는 시간 (그 뒤 접근·동행·감시)
+    ambush: {
+      range: 10, // 이 거리 안에서만 기습
+      opportunityDelay: [0.35, 0.8], // 기회(등 돌림·재장전·관찰 모드)가 이만큼 이어지면 기습
+      patience: [[13, 20], [7, 12]], // 가까이 붙은 뒤 이 시간이 지나면 기습
+      escortPatience: [[22, 34], [12, 20]], // 동행형은 등 뒤가 기본 위치라 더 오래 기다림
+      backAngle: 110, // 플레이어 시선에서 이 각도 이상 벗어나 있으면 '등을 보임'
+      telegraph: [0.5, 0.8], // 정체를 드러내는 예고 동작(무기 꺼내기 + 장전음) 시간
+      damagedTelegraph: 0.35, // 먼저 맞았을 때는 더 짧게
+      accuracyMul: 1.5, // 드러낸 직후 근거리 명중률 배율
+      hotTime: 5, // 그 배율 유지 시간
+    },
+    scout: {
+      watchToCall: [[16, 24], [9, 15]], // 플레이어를 이만큼 지켜보면 습격을 부름
+      callTime: 1.4, // 무전 동작 시간
+      revealAfterCall: [4, 7], // 부른 뒤 습격과 함께 정체를 드러내기까지
+      watchRange: [12, 38],
+      longWatchClue: 6, // 이 시간 넘게 지켜보면 '오래 내다봄' 단서
+    },
+    // 오판 유도용 진짜 행동 (위장 적과 비슷한 빈도)
+    decoy: {
+      allyChance: [0.3, 0.5], // 아군 분대 등장 중 낙오병(합류하러 다가옴)·동행 엄호
+      regroupEscortChance: 0.2, // 플레이어 곁으로 재집결하는 분대가 한 명을 동행으로 붙일 확률 (위장 적 동행과 섞이게)
+      civilianChance: [0.12, 0.25], // 민간인 등장 중 얼어붙음(웅크리지 못함)·도움 요청(다가옴)
+      escortTime: [35, 70],
+      frozenTime: [8, 18],
+    },
+  },
+
+  // 3단계: 관찰 모드 (Q 누르고 있기) — 총을 내리고 집중, 사실을 하나씩 알아챔 (결론은 보여주지 않음)
+  observe: {
+    zoom: 2, // 시야 확대 배율
+    raiseTime: 0.3, // Q 를 떼면 총을 다시 드는 시간 (사격 불가)
+    blendTime: 0.18, // 화면 전환 시간
+    coneDeg: 6, // 화면 중앙에서 이 각도 안의 가장 가까운 NPC
+    maxDistance: 70,
+    factInterval: 0.5, // 가까이서 사실 하나를 알아채는 시간
+    nearDist: 8, // 이 거리까지는 기본 속도
+    slowPerMeter: 1 / 12, // 그보다 멀면 1m 마다 이만큼 느려짐 (20m = 2배, 32m = 3배)
+    gearMaxDist: 38, // 이보다 멀면 장비 세부는 안 보임
+    darkInterior: 0.6, // 실내 어둠 정도가 이 이상이면 손전등이 비춰야 장비가 보임
+    outlineTime: 8, // 이상 단서를 찾은 대상의 노란 윤곽 표시 시간
+    memoLinger: 3.5, // Q 를 뗀 뒤 메모가 남는 시간
+    moveMul: 0.6, // 관찰 중 이동 속도 배율
+    sensitivityMul: 0.5, // 관찰 중 마우스 감도 배율
+    ambientDuck: 0.4, // 주변 소리 줄임
+  },
+
   // 자막·음성
   voice: {
     maxLines: 3,
@@ -372,6 +437,8 @@ export const CONFIG = {
     comboMax: 4.0,
     assist: 30, // 플레이어가 먼저 맞힌 적을 아군이 마무리
     evacuation: 25, // 민간인 대피 성공
+    disguiseId: 200, // 정체를 드러내기 전에 위장 적 사살 ("위장 적 식별")
+    evidence: 100, // 그 위장 적에게서 관찰로 이상 단서를 1개 이상 찾은 뒤 사살 ("근거 있는 판단")
   },
 
   audio: {

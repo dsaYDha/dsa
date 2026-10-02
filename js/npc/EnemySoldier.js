@@ -3,8 +3,11 @@
 // → 맞으면 엄폐 이동 → 시간이 지나면 측면 우회나 돌격
 // 유형: rifleman(소총수) / assault(돌격병: 빠른 접근·실내 습격) / window(창문·옥상 사수)
 // 대상: 플레이어 우선, 플레이어가 안 보이면 근처 아군 NPC (trueFaction 기준)
+// 3단계: opts.disguise(위장 프로필)가 있으면 위장 적 — 정체를 드러내기 전까지 DisguiseController 가 움직이고,
+//        드러낸 뒤(apparentFaction = enemy)엔 이 상태 머신으로 싸운다 (근거리 명중률 일시 상승)
 import { CONFIG, lerpThreat, lerpRangeThreat } from '../config.js';
 import { Soldier } from './Soldier.js';
+import { DisguiseController } from './Disguise.js';
 import { gameRand as R } from '../core/Random.js';
 
 const S = {
@@ -16,12 +19,13 @@ const S = {
   RUSH: 'rush',
   SEARCH: 'search',
   DEAD: 'dead',
+  DISGUISE: 'disguise', // 위장 중 (DisguiseController)
 };
 export const EnemyState = S;
 
 export class EnemySoldier extends Soldier {
   /**
-   * opts: { type, threat, entrance, nodeId, goalNode, goalNodes, buildingId, apparentFaction, outfit }
+   * opts: { type, threat, entrance, nodeId, goalNode, goalNodes, buildingId, apparentFaction, outfit, disguise }
    */
   constructor(game, opts) {
     super(game, { ...opts, trueFaction: 'enemy', apparentFaction: opts.apparentFaction || 'enemy', kind: opts.type || 'rifleman' });
@@ -46,9 +50,24 @@ export class EnemySoldier extends Soldier {
     this.reactRange = lerpRangeThreat(CONFIG.threat.reactionDelay, this.threat);
     this.accMul = lerpThreat(CONFIG.threat.accuracyMul, this.threat);
     this.flankChance = lerpThreat(CONFIG.threat.flankChance, this.threat);
+
+    // 위장 적
+    this.disguise = opts.disguise || null;
+    this.ctl = null;
+    this.hotUntil = -1;
+    if (this.disguise) {
+      this.ctl = new DisguiseController(this);
+      this.state = S.DISGUISE;
+    }
+  }
+
+  /** 정체를 드러내기 전의 위장 적인지 */
+  get disguised() {
+    return !!(this.disguise && !this.disguise.revealed);
   }
 
   get stateLabel() {
+    if (this.disguised) return `위장:${this.ctl.mode}`;
     return `${this.state}${this.state === S.COVER || this.state === S.POST ? ':' + this.coverPhase : ''}`;
   }
 
@@ -77,13 +96,34 @@ export class EnemySoldier extends Soldier {
   }
 
   _hitChance(dist, target) {
-    const acc = super._hitChance(dist, target);
+    let acc = super._hitChance(dist, target);
+    // 정체를 드러낸 직후: 근거리 기습이라 명중률이 높다
+    if (this.game.time < this.hotUntil) acc = Math.min(CONFIG.npc.accuracy.max, acc * CONFIG.disguise.ambush.accuracyMul);
     return target === 'player' ? acc : acc * CONFIG.npc.accuracyVsNpc;
+  }
+
+  // 총소리: 진짜 적 소총(굽은 탄창)과 아군 소총(직선 탄창)은 음색이 다르다
+  gunSound(pos) {
+    if (this.rig.outfit.rifleStyle === 'straight') this.game.audio.allyGunshot(pos);
+    else this.game.audio.enemyGunshot(pos);
+  }
+
+  // 위장 중 자극 (NPCManager 가 호출)
+  onGunfire(pos, dist) {
+    if (this.disguised) this.ctl.onGunfire(pos, dist);
+  }
+
+  onAimedAt(step) {
+    if (this.disguised) this.ctl.onAimedAt(step);
+  }
+
+  onRadioCallout(enemy) {
+    if (this.disguised) this.ctl.onRadioCallout(enemy);
   }
 
   // 플레이어 총성 청취
   hearShot(pos) {
-    if (!this.alive) return;
+    if (!this.alive || this.disguised) return;
     this.lastKnown.copy(pos);
     this.lastKnown.y -= 1.6;
     if (!this.aware) {
@@ -105,6 +145,11 @@ export class EnemySoldier extends Soldier {
 
   // ------------------------------------------------------------------
   think(dt) {
+    if (this.disguised) {
+      this.stateT += dt;
+      this.ctl.update(dt);
+      return;
+    }
     this._tickPerception(dt);
     this.suppressedT = Math.max(0, this.suppressedT - dt);
 
@@ -344,6 +389,11 @@ export class EnemySoldier extends Soldier {
   }
 
   onDamaged(info) {
+    if (this.disguised) {
+      // 먼저 맞으면 짧은 예고 뒤 곧바로 정체를 드러냄
+      this.ctl.startReveal('damaged');
+      return;
+    }
     this.aware = true;
     // 쏜 쪽을 기억 (플레이어 또는 아군 NPC)
     const att = info && info.attacker;
@@ -365,5 +415,10 @@ export class EnemySoldier extends Soldier {
       this.coverPhase = 'hide';
       this.phaseT = R.range(1.5, 2.5);
     }
+  }
+
+  onDeath() {
+    super.onDeath();
+    if (this.disguised) this.ctl.onKilled();
   }
 }

@@ -20,6 +20,7 @@
   <div id="app">
     <!-- 게임 HUD -->
     <div id="hud" class="hidden">
+      <div id="observe-vignette"></div>
       <div id="vignette"></div>
       <div id="lowhp"></div>
       <div id="ff-flash"></div>
@@ -31,8 +32,18 @@
       <div id="hitmarker"><i></i><i></i><i></i><i></i></div>
       <div id="killmarker"><i></i><i></i><i></i><i></i><b></b></div>
       <div id="ffmarker"><b></b><i></i></div>
+      <div id="observe-gauge"></div>
       <div id="popups"></div>
       <div id="ff-warning"></div>
+      <div id="disguise-kill"><div class="t">위장 적 사살!</div></div>
+
+      <!-- 관찰 메모: 알아챈 사실만 (결론은 쓰지 않음) -->
+      <div id="observe-memo" class="hidden">
+        <div class="hd">관찰 메모 <span id="observe-target"></span></div>
+        <ul id="observe-facts"></ul>
+        <div id="observe-status"></div>
+      </div>
+      <div id="observe-hint"></div>
 
       <div id="hud-top-left">
         <div id="hud-threat">위협 단계 1</div>
@@ -87,6 +98,15 @@
           <span class="blue">파란 표식</span>이 아군, 표식 없는 사복은 민간인이다.
           튀어나온 인물이 누구인지 <b>표식을 확인하고</b> 쏴라. 아군·민간인을 쏘면 큰 감점과 경고 —
           경고 3회면 작전 해임이다.</p>
+        <div class="briefing">
+          <div class="hd">작전 브리핑</div>
+          <ul>
+            <li>적이 <span class="blue">아군</span>·<b>민간인</b>으로 위장해 섞여 든다. 표식과 옷만 믿지 마라.</li>
+            <li>진짜 아군 장비: <b>낮고 넓은 헬멧</b> · <b>직선 탄창 소총</b> · 어깨의 <b>파란 방패 패치</b></li>
+            <li>진짜 민간인: 비무장 · 민간 신발 · 손이 보임 · 총성에 웅크림</li>
+            <li>수상하면 <kbd>Q</kbd> 누르고 있기 = <b>관찰</b>. 총을 내리고 집중해 사실을 하나씩 알아챈다 — 그동안은 쏠 수 없다.</li>
+          </ul>
+        </div>
         <div class="controls">
           <div><kbd>마우스</kbd> 시점</div>
           <div><kbd>W A S D</kbd> 이동</div>
@@ -97,6 +117,7 @@
           <div><kbd>우클릭</kbd> 정조준</div>
           <div><kbd>R</kbd> 재장전</div>
           <div><kbd>F</kbd> 손전등</div>
+          <div><kbd>Q</kbd> 관찰 (누르고 있기)</div>
           <div><kbd>Esc</kbd> 일시정지</div>
           <div><kbd>`</kbd> 디버그</div>
         </div>

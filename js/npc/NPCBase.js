@@ -1,12 +1,14 @@
 // 모든 인물 NPC 의 공통 베이스
 // trueFaction: 실제 소속 (enemy / ally / civilian) — 점수·페널티·AI 적대 판정은 이것 기준
-// apparentFaction: 겉보기 소속 (표식·복장) — 지금은 항상 같지만 3단계 위장 적에서 달라진다
+// apparentFaction: 겉보기 소속 (표식·복장) — 3단계 위장 적은 ally/civilian 으로 보이다가 정체를 드러내면 enemy
+// 3단계: 행동 기록(behavior) — 실제로 일어난 일만 남겨 관찰 모드가 '사실'로 꺼내 본다 (npc/Clues.js)
 import * as THREE from 'three';
 import { CONFIG } from '../config.js';
 import { Events } from '../core/EventBus.js';
 import { HumanoidRig } from './HumanoidRig.js';
 import { Insignia } from './Insignia.js';
 import { soldierOutfit, civilianOutfit, describeEquipment } from './Outfits.js';
+import { factsFor } from './Clues.js';
 
 let NEXT_ID = 1;
 const _v = new THREE.Vector3();
@@ -63,6 +65,15 @@ export class NPCBase {
     this.lastDamage = null;
     this.handsUp = 0; // 0~1 손 들기
     this.cower = 0; // 0~1 머리 감싸고 웅크림
+    // 3단계 자세 (행동 단서가 3D 애니메이션에 실제로 보이게)
+    this.hideHands = 0; // 0~1 손 숨기기 (handsMode: 'back' 등 뒤 | 'pocket' 주머니)
+    this.handsMode = 'back';
+    this.shock = 0; // 0~1 충격으로 얼어붙음 (두 손을 가슴에 모음)
+    this.tear = 0; // 0~1 표식 뜯기 (위장 적 정체 드러내기)
+    this.reach = 0; // 0~1 등 뒤 숨긴 총 꺼내기
+    this.radioTalk = 0; // 0~1 무전기에 대고 말하기
+    this.behavior = new Map(); // 행동 기록: key → { first, t, n, variant }
+    this.observed = null; // 관찰 기록: { found: Map(key → fact), anomalies, outlineUntil }
     this.playerDamaged = false; // 플레이어에게 한 번이라도 맞았는지 (어시스트 판정)
     this._yieldT = 0;
     // 음성 프로필 (자막·TTS 화자별 음높이·속도)
@@ -74,10 +85,12 @@ export class NPCBase {
     return describeEquipment(this);
   }
 
-  // 손 상태: 'weapon' | 'aiming' | 'raised' | 'covering' | 'carrying' | 'empty'
+  // 손 상태: 'weapon' | 'aiming' | 'raised' | 'covering' | 'hidden' | 'clutching' | 'carrying' | 'empty'
   handsState() {
     if (this.handsUp > 0.5) return 'raised';
     if (this.cower > 0.5) return 'covering';
+    if (this.hideHands > 0.5) return 'hidden';
+    if (this.shock > 0.5) return 'clutching';
     if (this.rig.outfit.rifle) return this.aim > 0.5 ? 'aiming' : 'weapon';
     if (this.rig.outfit.bag === 'carry') return 'carrying';
     return 'empty';
@@ -92,6 +105,45 @@ export class NPCBase {
 
   // 근처를 지나간 탄 (제압) — 서브클래스가 필요하면 반응
   onSuppressed() {}
+
+  // ------------------------------------------------------------------
+  // 3단계: 행동 기록·관찰
+  // ------------------------------------------------------------------
+  /** 실제로 일어난 행동을 기록 (관찰 모드가 사실로 꺼내 봄). key 는 npc/Clues.js BEHAVIOR 의 키 */
+  noteBehavior(key, variant = null) {
+    const t = this.game.time;
+    const rec = this.behavior.get(key);
+    if (rec) {
+      rec.t = t;
+      rec.n++;
+      if (variant) rec.variant = variant;
+    } else this.behavior.set(key, { first: t, t, n: 1, variant });
+  }
+
+  hasBehavior(key) {
+    return this.behavior.has(key);
+  }
+
+  /** 관찰 가능한 사실 목록 (장비 + 기록된 행동) */
+  observationFacts() {
+    return factsFor(this, this.game.time);
+  }
+
+  /** 관찰 기록 (없으면 생성) */
+  getObserved() {
+    if (!this.observed) this.observed = { found: new Map(), anomalies: 0, outlineUntil: -1 };
+    return this.observed;
+  }
+
+  /** 정체를 드러내기 전의 위장 적인지 (EnemySoldier 가 덮어씀) */
+  get disguised() {
+    return false;
+  }
+
+  /** 겉보기에 적(빨간 표식)인지 — 아군·민간인 AI 는 이것만 보고 판단한다 (위장에 속음) */
+  get looksHostile() {
+    return this.apparentFaction === 'enemy';
+  }
 
   // 3단계: 겉보기 소속 변경 (표식 색·형태 교체, 필요하면 복장도 교체)
   setApparentFaction(faction, outfit = null) {
@@ -316,7 +368,10 @@ export class NPCBase {
 
     this.root.position.copy(this.position);
     this.root.rotation.y = this.yaw;
-    this.rig.animate(dt, { speed: this.curSpeed, aim: this.aim, aimPitch: this.aimPitch, crouch: this.crouch, handsUp: this.handsUp, cower: this.cower });
+    this.rig.animate(dt, {
+      speed: this.curSpeed, aim: this.aim, aimPitch: this.aimPitch, crouch: this.crouch, handsUp: this.handsUp, cower: this.cower,
+      hideHands: this.hideHands, handsMode: this.handsMode, shock: this.shock, tear: this.tear, reach: this.reach, radioTalk: this.radioTalk,
+    });
   }
 
   think() {}

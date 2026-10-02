@@ -1,6 +1,8 @@
 // HUD — 크로스헤어(탄퍼짐 반영), 히트/킬 마커, 점수 팝업, 체력·탄약·점수·사살·콤보 게이지·위협 단계·생존 시간·킬 로그,
 // 피격 비네트 + 방향 표시. 미니맵 없음 (적 위치는 눈과 귀, 아군 무전 콜아웃으로 파악)
 // 2단계: 경고 횟수, 콤보 잠금, 오인 사격 피드백(가장자리 플래시·전용 마커·중앙 경고), 나침반(콜아웃 방위용), 무전 자막 영역
+// 3단계: 관찰 모드(가장자리 어둡게·관찰 게이지·관찰 메모 — 사실만, 결론 없음), 첫 위장 적·첫 관찰 안내,
+//        정체를 드러내는 위장 적 방향 경고, "위장 적 사살!" 피드백
 import * as THREE from 'three';
 import { CONFIG } from '../config.js';
 import { Events } from '../core/EventBus.js';
@@ -11,6 +13,15 @@ const fmtTime = (t) => {
   const s = Math.floor(t % 60);
   return `${String(m).padStart(2, '0')}:${String(s).padStart(2, '0')}`;
 };
+const esc = (t) => String(t).replace(/[&<>]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;' })[c]);
+
+// 관찰 메모의 대상 설명 — 겉모습만 (결론 없음)
+function lookOf(npc) {
+  const ap = npc.apparentFaction;
+  if (ap === 'ally') return '파란 표식 군인';
+  if (ap === 'enemy') return '빨간 표식 군인';
+  return npc.rig.outfit.elder ? '사복 차림 노인' : '사복 차림';
+}
 
 export class HUD {
   constructor(game) {
@@ -52,6 +63,14 @@ export class HUD {
       comboLock: $('hud-combo-lock'),
       comboLockT: $('hud-combo-lock-t'),
       compass: $('compass-strip'),
+      obsVignette: $('observe-vignette'),
+      obsGauge: $('observe-gauge'),
+      obsMemo: $('observe-memo'),
+      obsTarget: $('observe-target'),
+      obsFacts: $('observe-facts'),
+      obsStatus: $('observe-status'),
+      obsHint: $('observe-hint'),
+      dkill: $('disguise-kill'),
     };
     // 나침반 눈금 (15도 간격, 8방위 라벨)
     this.compassMarks = [];
@@ -104,6 +123,30 @@ export class HUD {
       game.audio.hurt();
     });
     ev.on(Events.THREAT_LEVEL, (e) => this.showBanner(`위협 단계 ${e.level}`, '적의 수와 정확도가 올라갑니다'));
+    // 3단계
+    ev.on(Events.DISGUISE_SPAWNED, () => {
+      if (this.disguiseHinted) return;
+      this.disguiseHinted = true;
+      setTimeout(() => this.showBanner('위장 적 주의', '파란 표식·사복이라도 안심하지 마라 — 수상하면 Q(누르고 있기)로 관찰'), 600);
+    });
+    ev.on(Events.OBSERVE_START, (e) => {
+      if (!e.first) return;
+      this.el.obsHint.textContent = '대상을 계속 바라보면 사실이 하나씩 메모된다 · 판단은 직접';
+      this.el.obsHint.classList.add('show');
+      window.clearTimeout(this._obsHintTimer);
+      this._obsHintTimer = setTimeout(() => this.el.obsHint.classList.remove('show'), 6000);
+    });
+    ev.on(Events.DISGUISE_REVEALING, (e) => {
+      // 정체를 드러내는 위장 적: 시야 밖이면 방향 경고 (장전음과 함께)
+      if (!e.npc.visibleToPlayer && e.npc.position.distanceTo(game.player.feet) < 18) this.addDamageDir(e.npc.position, 'warn');
+    });
+    ev.on(Events.DISGUISE_KILLED, () => {
+      const el = this.el.dkill;
+      el.classList.remove('show');
+      void el.offsetWidth;
+      el.classList.add('show');
+      game.audio.disguiseKill();
+    });
   }
 
   // 오인 사격 피드백: 가장자리 플래시 + 전용 마커 + 효과음 + 중앙 경고 문구
@@ -159,6 +202,11 @@ export class HUD {
     this.hitT = this.killT = 0;
     this.el.banner.classList.remove('show');
     this.el.ffWarning.classList.remove('show');
+    this.el.dkill.classList.remove('show');
+    this.el.obsHint.classList.remove('show');
+    this.el.obsMemo.classList.add('hidden');
+    this.disguiseHinted = false;
+    this._memoKey = '';
     this._last = {};
   }
 
@@ -190,7 +238,8 @@ export class HUD {
   feed(e) {
     const div = document.createElement('div');
     div.className = 'feed';
-    const type = e.victim && e.victim.tcfg ? e.victim.tcfg.label : '적';
+    const v = e.victim;
+    const type = v && v.disguise ? '위장 적' : v && v.tcfg ? v.tcfg.label : '적';
     const extras = e.labels.length ? ` <i>${e.labels.join(' · ')}</i>` : '';
     div.innerHTML = `<span class="tag enemy">적</span> ${type} 사살${extras} <b>+${e.points}</b>`;
     this.el.killfeed.prepend(div);
@@ -199,9 +248,37 @@ export class HUD {
     while (this.el.killfeed.children.length > 5) this.el.killfeed.lastChild.remove();
   }
 
-  addDamageDir(src) {
+  // 관찰 모드: 가장자리 어둡게 + 중앙 게이지 + 관찰 메모 (사실만)
+  _updateObservation(obs) {
+    const el = this.el;
+    el.obsVignette.style.opacity = obs.t.toFixed(3);
+    const memo = obs.memo();
+    const gaugeOn = obs.active && obs.target;
+    el.obsGauge.classList.toggle('on', !!gaugeOn);
+    if (gaugeOn) el.obsGauge.style.setProperty('--p', `${Math.min(1, obs.progress) * 360}deg`);
+    if (!memo) {
+      el.obsMemo.classList.add('hidden');
+      this._memoKey = '';
+      return;
+    }
+    el.obsMemo.classList.remove('hidden');
+    el.obsMemo.classList.toggle('dim', !obs.active);
+    el.obsMemo.classList.toggle('outlined', memo.outlined);
+    const n = memo.npc;
+    const dist = memo.distance != null ? ` · ${Math.round(memo.distance)}m` : '';
+    const key = `${n.id}|${memo.facts.length}|${dist}|${memo.status}|${n.alive}`;
+    if (key === this._memoKey) return;
+    this._memoKey = key;
+    el.obsTarget.textContent = `${lookOf(n)}${dist}${n.alive ? '' : ' (쓰러짐)'}`;
+    el.obsFacts.innerHTML = memo.facts.length
+      ? memo.facts.map((f) => `<li class="${f.anomalous ? 'odd' : ''}">${f.anomalous ? '<b>?</b> ' : ''}${esc(f.text)}</li>`).join('')
+      : '<li class="none">아직 알아낸 것 없음</li>';
+    el.obsStatus.textContent = memo.status || '';
+  }
+
+  addDamageDir(src, cls = '') {
     const div = document.createElement('div');
-    div.className = 'dmgdir';
+    div.className = `dmgdir ${cls}`;
     this.el.dmgDirs.appendChild(div);
     this.dirs.push({ div, src: src.clone(), t: 1.4 });
     if (this.dirs.length > 6) {
@@ -242,7 +319,9 @@ export class HUD {
     const halfFov = THREE.MathUtils.degToRad(game.camera.fov / 2);
     const gap = 3 + (Math.tan(spread) / Math.tan(halfFov)) * (window.innerHeight / 2);
     this.el.crosshair.style.setProperty('--gap', `${Math.min(140, gap).toFixed(1)}px`);
-    this.el.crosshair.style.opacity = (p.sprinting ? 0.15 : 1 - w.adsT * 0.85).toFixed(2);
+    const obs = game.observation;
+    this.el.crosshair.style.opacity = (p.sprinting ? 0.15 : (1 - w.adsT * 0.85) * (1 - obs.t)).toFixed(2);
+    this._updateObservation(obs);
 
     this.hitT = Math.max(0, this.hitT - dt);
     this.killT = Math.max(0, this.killT - dt);

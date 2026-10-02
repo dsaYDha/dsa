@@ -1,4 +1,5 @@
 // 돌격소총 로직 — 히트스캔 연사, 탄창 30발, 재장전(중 사격 불가), 정조준, 반동, 탄퍼짐
+// 3단계: 관찰 모드 중(총을 내림)과 다시 드는 0.3초 동안은 사격·정조준 불가
 import * as THREE from 'three';
 import { CONFIG } from '../config.js';
 import { Events } from '../core/EventBus.js';
@@ -48,8 +49,9 @@ export class Weapon {
     this.timeSinceShot += dt;
     this.cooldown = Math.max(-this.interval, this.cooldown - dt);
 
+    const down = game.observation && game.observation.weaponDown;
     // 정조준
-    const wantAds = input.isAim() && player.alive && !player.sprinting;
+    const wantAds = input.isAim() && player.alive && !player.sprinting && !down;
     const step = dt / cfg.adsTime;
     this.adsT = THREE.MathUtils.clamp(this.adsT + (wantAds ? step : -step), 0, 1);
 
@@ -68,7 +70,7 @@ export class Weapon {
     }
 
     // 사격
-    if (player.alive && input.isFire() && !this.reloading) {
+    if (player.alive && input.isFire() && !this.reloading && !down) {
       if (this.ammo > 0) {
         while (this.cooldown <= 0 && this.ammo > 0) {
           this.fire(player);

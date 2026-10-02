@@ -11,11 +11,23 @@ export const sharedUniforms = {
 const SUN_PATCH = 'getDirectionalLightInfo( directionalLight, directLight );';
 
 // attributeMode: true 면 정점 속성 aInterior 사용(정적 지형), false 면 재질별 uInterior 유니폼 사용(NPC)
+// NPC 재질(attributeMode=false)에는 uHighlight(노란 윤곽: 가장자리일수록 밝은 자체 발광)도 붙는다 — 3단계 관찰 표시용
 export function patchInterior(material, attributeMode = true) {
   material.userData.uInterior = { value: 0 };
+  if (!attributeMode) material.userData.uHighlight = { value: new THREE.Color(0, 0, 0) };
   material.onBeforeCompile = (shader) => {
     shader.uniforms.uInterior = material.userData.uInterior;
     shader.uniforms.uInteriorAmbient = sharedUniforms.uInteriorAmbient;
+    if (!attributeMode) {
+      shader.uniforms.uHighlight = material.userData.uHighlight;
+      // 윤곽 발광: 시선과 비스듬한 면(실루엣 쪽)일수록 강하게 — 실내 어둠과 무관하게 보인다
+      shader.fragmentShader = shader.fragmentShader
+        .replace('#include <common>', '#include <common>\nuniform vec3 uHighlight;')
+        .replace(
+          '#include <emissivemap_fragment>',
+          '#include <emissivemap_fragment>\n\tfloat hlRim = 1.0 - clamp( abs( dot( normal, normalize( vViewPosition ) ) ), 0.0, 1.0 );\n\ttotalEmissiveRadiance += uHighlight * ( 0.05 + 2.2 * hlRim * hlRim * hlRim );',
+        );
+    }
     const vDecl = attributeMode
       ? 'attribute float aInterior;\nuniform float uInterior;\nvarying float vInterior;'
       : 'uniform float uInterior;\nvarying float vInterior;';
@@ -34,7 +46,7 @@ export function patchInterior(material, attributeMode = true) {
         `${lightsChunk}\n#if defined( RE_IndirectDiffuse )\n\tirradiance *= mix( 1.0, uInteriorAmbient, vInterior );\n#endif\n`,
       );
   };
-  material.customProgramCacheKey = () => (attributeMode ? 'interior-attr-v1' : 'interior-uni-v1');
+  material.customProgramCacheKey = () => (attributeMode ? 'interior-attr-v1' : 'interior-uni-hl-v2');
   return material;
 }
 

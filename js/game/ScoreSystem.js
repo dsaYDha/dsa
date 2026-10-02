@@ -1,6 +1,8 @@
 // 점수 — 사살 100, 헤드샷 +50, 즉응 사살 +50, 멀티킬(+100 / +250), 콤보 배율(×1.5 → … ×4)
 // NPC_KILLED 이벤트를 구독. trueFaction 기준으로 판정 (오인 사격 페널티는 PenaltySystem 이 applyPenalty/resetCombo/lockCombo 호출)
 // 2단계: 어시스트 +30 (플레이어가 먼저 맞힌 적을 아군이 마무리), 민간인 대피 +25. 점수는 음수까지 내려갈 수 있음
+// 3단계: 정체를 드러내기 전에 위장 적 사살 +200 "위장 적 식별", 그 전에 관찰로 이상 단서를 찾았으면 +100 "근거 있는 판단"
+//        (드러낸 뒤 사살은 일반 적과 같음). 콤보 배율은 모두 적용. 위장 적에게 기습당한 횟수도 집계
 import { CONFIG } from '../config.js';
 import { Events } from '../core/EventBus.js';
 
@@ -10,6 +12,9 @@ export class ScoreSystem {
     this.reset();
     game.events.on(Events.NPC_KILLED, (e) => this.onKill(e));
     game.events.on(Events.CIVILIAN_EVACUATED, () => this._bonus(CONFIG.score.evacuation, '민간인 대피', 'evac', () => this.evacuated++));
+    game.events.on(Events.DISGUISE_REVEALED, (e) => {
+      if (e.ambush) this.ambushedBy++;
+    });
   }
 
   _bonus(points, label, kind, count) {
@@ -58,6 +63,9 @@ export class ScoreSystem {
     this.assists = 0;
     this.evacuated = 0;
     this.penaltyTotal = 0;
+    this.disguisedKills = 0; // 정체를 드러내기 전에 사살한 위장 적
+    this.evidenceKills = 0; // 그중 관찰로 이상 단서를 찾은 뒤 사살
+    this.ambushedBy = 0; // 위장 적에게 기습당한 횟수
   }
 
   get comboFraction() {
@@ -100,6 +108,19 @@ export class ScoreSystem {
       pts += S.quickKill;
       this.quickKills++;
       labels.push('즉응');
+    }
+    // 3단계: 위장 적 식별 (정체를 드러내기 전 — 먼저 쏴서 드러내던 중이면 플레이어의 판단으로 인정)
+    const ctl = e.victim && e.victim.ctl;
+    if (ctl && ctl.identifiedKill) {
+      pts += S.disguiseId;
+      labels.push('위장 적 식별');
+      this.disguisedKills++;
+      const ob = e.victim.observed;
+      if (ob && ob.anomalies > 0) {
+        pts += S.evidence;
+        labels.push('근거 있는 판단');
+        this.evidenceKills++;
+      }
     }
     // 멀티킬
     if (this.multiTimer > 0) this.multiCount++;
@@ -147,6 +168,9 @@ export class ScoreSystem {
       assists: this.assists,
       evacuated: this.evacuated,
       penaltyTotal: this.penaltyTotal,
+      disguisedKills: this.disguisedKills,
+      evidenceKills: this.evidenceKills,
+      ambushedBy: this.ambushedBy,
       time,
     };
   }

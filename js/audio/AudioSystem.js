@@ -12,6 +12,7 @@ export class AudioSystem {
     this._npcSteps = 0;
     this._heartbeat = false;
     this._nextBeat = 0;
+    this._focus = 0;
   }
 
   init() {
@@ -339,6 +340,92 @@ export class AudioSystem {
   }
 
   // ------------------------------------------------------------------
+  // 3단계: 위장 적·관찰
+  // ------------------------------------------------------------------
+  // 관찰 모드 집중: 주변 소리(환경·효과음)를 줄임 (0 = 평소)
+  setFocus(f) {
+    if (!this.ready || Math.abs(f - this._focus) < 0.01) return;
+    this._focus = f;
+    const t = this.ctx.currentTime;
+    this.amb.gain.setTargetAtTime(0.9 * (1 - 0.8 * f), t, 0.08);
+    this.sfx.gain.setTargetAtTime(1 - 0.55 * f, t, 0.08);
+  }
+
+  // 관찰 모드 들어감/나옴 — 숨 들이쉬는 듯한 짧은 소리
+  observe(on) {
+    if (!this.ready) return;
+    const t = this.now;
+    this._noiseBurst(this.ui, t, { dur: on ? 0.32 : 0.2, gain: 0.07, type: 'bandpass', freq: on ? 700 : 1100, freqEnd: on ? 380 : 1500, q: 1.2, attack: 0.08 });
+  }
+
+  // 관찰로 사실 하나를 알아챔 (이상한 사실은 조금 다른 음)
+  notice(anomalous) {
+    if (!this.ready) return;
+    const t = this.now;
+    if (anomalous) {
+      this._tone(this.ui, t, { f0: 1320, dur: 0.12, gain: 0.07, type: 'triangle' });
+      this._tone(this.ui, t + 0.07, { f0: 990, dur: 0.18, gain: 0.06, type: 'triangle' });
+    } else this._tone(this.ui, t, { f0: 1760, dur: 0.06, gain: 0.04, type: 'sine' });
+  }
+
+  // 정체를 드러내는 순간: 장전음 "철컥" (위치 사운드, 크게)
+  rack(pos) {
+    if (!this.ready) return;
+    const t = this.now;
+    const out = this._spatial(pos, { ref: 6, rolloff: 0.8, reverb: 0.25, muffle: false });
+    const g = this.ctx.createGain();
+    g.gain.value = 2.2;
+    g.connect(out);
+    this._noiseBurst(g, t, { dur: 0.05, gain: 0.8, type: 'bandpass', freq: 2600, q: 2.5 });
+    this._tone(g, t, { f0: 1500, f1: 900, dur: 0.04, gain: 0.35, type: 'square' });
+    this._noiseBurst(g, t + 0.16, { dur: 0.06, gain: 0.9, type: 'bandpass', freq: 1900, q: 2.5 });
+    this._tone(g, t + 0.16, { f0: 1100, f1: 600, dur: 0.06, gain: 0.4, type: 'square' });
+  }
+
+  // 정체가 드러날 때 짧은 긴장 효과음 (불협화음이 부풀었다 끊김)
+  revealSting() {
+    if (!this.ready) return;
+    const t = this.now;
+    this._tone(this.ui, t, { f0: 92, f1: 110, dur: 0.55, gain: 0.22, type: 'sawtooth', attack: 0.12 });
+    this._tone(this.ui, t, { f0: 98, f1: 117, dur: 0.55, gain: 0.18, type: 'sawtooth', attack: 0.12 });
+    this._tone(this.ui, t + 0.05, { f0: 1480, f1: 1560, dur: 0.4, gain: 0.04, type: 'sine', attack: 0.2 });
+  }
+
+  // 테이프 완장을 뜯는 소리
+  tapeRip(pos) {
+    if (!this.ready) return;
+    const out = this._spatial(pos, { ref: 3, rolloff: 1.2, reverb: 0.1 });
+    this._noiseBurst(out, this.now, { dur: 0.22, gain: 0.6, type: 'bandpass', freq: 3200, freqEnd: 1400, q: 1.5, attack: 0.01 });
+  }
+
+  // 숨긴 총이 바닥에 떨어지는 소리
+  clatter(pos) {
+    if (!this.ready) return;
+    const t = this.now;
+    const out = this._spatial(pos, { ref: 3, rolloff: 1.2, reverb: 0.2 });
+    this._tone(out, t + 0.25, { f0: rand(1800, 2400), dur: 0.12, gain: 0.25, type: 'triangle' });
+    this._noiseBurst(out, t + 0.25, { dur: 0.08, gain: 0.5, type: 'bandpass', freq: 1500, q: 1.2 });
+    this._tone(out, t + 0.4, { f0: rand(1300, 1700), dur: 0.08, gain: 0.15, type: 'triangle' });
+  }
+
+  // 정찰형 위장 적이 무전기에 대고 말함 (작은 잡음)
+  enemyRadio(pos) {
+    if (!this.ready || this._dist(pos) > 30) return;
+    const t = this.now;
+    const out = this._spatial(pos, { ref: 2, rolloff: 1.4, reverb: 0.05 });
+    for (let i = 0; i < 3; i++) this._noiseBurst(out, t + i * 0.22, { dur: 0.12, gain: 0.25, type: 'bandpass', freq: 1800, q: 4 });
+  }
+
+  // 위장 적 사살 확인 (오인 사격 버저와 확실히 다른 밝은 음)
+  disguiseKill() {
+    if (!this.ready) return;
+    const t = this.now;
+    this._tone(this.ui, t, { f0: 660, dur: 0.12, gain: 0.1, type: 'triangle' });
+    this._tone(this.ui, t + 0.09, { f0: 990, dur: 0.14, gain: 0.1, type: 'triangle' });
+    this._tone(this.ui, t + 0.18, { f0: 1320, dur: 0.24, gain: 0.09, type: 'triangle' });
+  }
+
+  // ------------------------------------------------------------------
   // 피드백
   // ------------------------------------------------------------------
   hitMarker(headshot) {
@@ -556,14 +643,15 @@ export class AudioSystem {
     hum.start();
   }
 
-  // 체력 낮을 때 심장 박동
-  updateHeartbeat(active, time) {
+  // 심장 박동 — 체력이 낮을 때, 관찰 모드에서는 더 느리고 작게(soft)
+  updateHeartbeat(active, time, soft = false) {
     if (!this.ready) return;
     if (active && time >= this._nextBeat) {
-      this._nextBeat = time + 0.85;
+      this._nextBeat = time + (soft ? 1.05 : 0.85);
       const t = this.now;
-      this._tone(this.ui, t, { f0: 62, f1: 40, dur: 0.12, gain: 0.5 });
-      this._tone(this.ui, t + 0.18, { f0: 58, f1: 38, dur: 0.12, gain: 0.35 });
+      const k = soft ? 0.55 : 1;
+      this._tone(this.ui, t, { f0: 62, f1: 40, dur: 0.12, gain: 0.5 * k });
+      this._tone(this.ui, t + 0.18, { f0: 58, f1: 38, dur: 0.12, gain: 0.35 * k });
     }
   }
 }

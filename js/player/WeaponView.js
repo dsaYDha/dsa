@@ -1,5 +1,5 @@
 // 1인칭 총기 모델 — 별도 씬/카메라로 그려 벽에 파묻히지 않음
-// 흔들림(이동·마우스), 반동, 정조준, 재장전, 달리기 자세 애니메이션
+// 흔들림(이동·마우스), 반동, 정조준, 재장전, 달리기 자세 애니메이션, 관찰 모드(총을 내림)
 import * as THREE from 'three';
 import { CONFIG } from '../config.js';
 import { gameRand as R } from '../core/Random.js';
@@ -43,6 +43,7 @@ export class WeaponView {
     this.kickSide = 0;
     this.flashT = 0;
     this.sprintT = 0;
+    this.lowerT = 0;
     this.visible = true;
   }
 
@@ -220,6 +221,19 @@ export class WeaponView {
         pos.z += t * 0.02;
         rz += t * 0.1;
       }
+    }
+
+    // 관찰 모드: 총을 아래로 내림 (Q 를 떼면 0.3초에 걸쳐 다시 듦)
+    const obs = game.observation;
+    const lowerWant = obs && obs.active ? 1 : 0;
+    const raise = CONFIG.observe.raiseTime;
+    this.lowerT += (lowerWant - this.lowerT) * Math.min(1, dt * (lowerWant ? 14 : 1 / raise * 3.2));
+    if (this.lowerT > 0.001) {
+      const e = this.lowerT * this.lowerT * (3 - 2 * this.lowerT);
+      pos.y -= e * 0.26;
+      pos.x += e * 0.05;
+      rx -= e * 0.75;
+      rz += e * 0.35;
     }
 
     // 사망: 아래로 떨어짐

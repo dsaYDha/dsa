@@ -1,6 +1,8 @@
 // 파츠 조립식 로우폴리 인간형 — 머리, 헬멧, 상의, 조끼, 팔, 다리, 군화, 소총
 // 복장(outfit)을 바꿔 끼울 수 있어 3단계 위장 복장(사복·다른 군복)에 그대로 쓰인다.
+// 3단계 단서 파츠: 어깨 부대 패치(진짜 아군 = 파란 방패), 허리 불룩함·등 뒤 총몸 윤곽(숨긴 무기), 무전기, 조끼 끈
 // 절차적 애니메이션: 걷기, 달리기, 조준, 사격, 피격, 사망, 앉기
+//   + 손 숨기기(등 뒤·주머니), 얼어붙음, 표식 뜯기, 숨긴 무기 꺼내기, 무전기에 대고 말하기
 // 성능: 파츠를 뼈 하나씩에 강체 스키닝해 몸 전체를 SkinnedMesh 하나(드로우콜 1)로 그린다.
 import * as THREE from 'three';
 import { mergeGeometries } from 'three/addons/utils/BufferGeometryUtils.js';
@@ -73,7 +75,53 @@ export function defaultOutfit(faction) {
     bag: null, // null | 'backpack' | 'shoulder' | 'carry'
     bagColor: 0x3a3028,
     elder: false,
+    patch: null, // 어깨 부대 패치: 'shield'(진짜 아군, 파란 방패) | 'square' | 'round' | null
+    waistBulge: false, // 허리춤 불룩함 (옷 속 무기)
+    backRifle: false, // 등 뒤로 비치는 총몸 윤곽
+    radio: false, // 가슴의 무전기
+    vestStraps: false, // 옷 위로 보이는 조끼 끈
   };
+}
+
+// 어깨 부대 패치 (팔 바깥면, 완장 아래) — side: +1 왼팔(+x), -1 오른팔(-x)
+// 작고 평평해서 가까이서만 보인다. 진짜 아군은 항상 파란 방패(테두리 밝은 색)
+const PATCH_STYLE = {
+  shield: { main: 0x2858c8, rim: 0xd9cfa8 },
+  square: { main: 0x4a5a32, rim: 0x1c1c1a },
+  round: { main: 0x8a7a3a, rim: 0x1c1c1a },
+};
+function patchShape(kind, scale) {
+  if (kind === 'round') return new THREE.CircleGeometry(0.031 * scale, 10);
+  const sh = new THREE.Shape();
+  if (kind === 'square') {
+    const h = 0.029 * scale;
+    sh.moveTo(-h, h); sh.lineTo(h, h); sh.lineTo(h, -h); sh.lineTo(-h, -h); sh.closePath();
+  } else {
+    const w = 0.028 * scale;
+    sh.moveTo(-w, 0.034 * scale); sh.lineTo(w, 0.034 * scale); sh.lineTo(w, -0.006 * scale);
+    sh.lineTo(0, -0.04 * scale); sh.lineTo(-w, -0.006 * scale); sh.closePath();
+  }
+  return new THREE.ShapeGeometry(sh);
+}
+function patchGeometry(kind, side) {
+  const st = PATCH_STYLE[kind];
+  if (!st) return [];
+  const out = [];
+  // 팔 바깥면에서 앞쪽으로 약간(24°) 돌려 붙임 — 옆·비스듬한 각도에서 잘 보이고 정면에선 거의 안 보임
+  const yaw = side > 0 ? Math.PI / 2 - 0.42 : -Math.PI / 2 + 0.42;
+  for (const [scale, color, off] of [[1.38, st.rim, 0.0625], [1.12, st.main, 0.0645]]) {
+    const g = patchShape(kind, scale);
+    g.rotateY(yaw);
+    g.translate(side * off, -0.215, 0.012);
+    out.push(paint(g, color));
+  }
+  return out;
+}
+
+// 색을 어둡게 (옷 속에서 불룩 튀어나온 부분)
+function shade(color, k) {
+  _c.setHex(color).multiplyScalar(k);
+  return _c.getHex();
 }
 
 const geoCache = new Map();
@@ -113,7 +161,7 @@ function headGeometry(o) {
   return merge(head);
 }
 
-function rifleGeometry(style) {
+export function rifleGeometry(style) {
   if (style === 'straight') {
     // 아군 소총: 직선 탄창, 검은 폴리머 개머리판·총열덮개, 상부 손잡이
     return merge([
@@ -175,9 +223,30 @@ function buildGeometries(o) {
   }
   if (o.bag === 'backpack') torso.push(box(0.3, 0.34, 0.14, o.bagColor, 0, 0.26, -0.18));
   if (o.bag === 'shoulder') torso.push(box(0.04, 0.62, 0.02, o.bagColor, 0, 0.26, 0.115, 0, 0, 0.62));
+  // 3단계 단서: 옷 속 무기 (허리춤 불룩함 / 등 뒤 총몸 윤곽 + 옷자락 아래로 삐져나온 개머리판·위로 보이는 총구)
+  if (o.waistBulge) torso.push(box(0.15, 0.12, 0.09, shade(o.uniform, 0.72), -0.11, 0.07, 0.13));
+  if (o.backRifle) {
+    torso.push(box(0.08, 0.64, 0.06, shade(o.uniform, 0.7), 0.04, 0.25, -0.137, 0, 0, 0.35));
+    torso.push(box(0.03, 0.13, 0.03, 0x1d1e20, -0.085, 0.64, -0.137, 0, 0, 0.35)); // 어깨 위로 보이는 총구
+    torso.push(box(0.055, 0.1, 0.055, 0x4a3422, 0.155, -0.07, -0.137, 0, 0, 0.35)); // 옷자락 아래 개머리판
+  }
+  if (o.radio) {
+    torso.push(box(0.062, 0.1, 0.036, 0x262724, 0.12, 0.37, 0.13));
+    torso.push(box(0.03, 0.02, 0.006, 0x6a6a60, 0.12, 0.395, 0.149)); // 스피커 망
+    torso.push(box(0.011, 0.15, 0.011, 0x111111, 0.138, 0.49, 0.13)); // 안테나
+  }
+  if (o.vestStraps) {
+    const sc = 0x3b3f2c;
+    for (const sx of [-0.09, 0.09]) {
+      torso.push(box(0.04, 0.46, 0.014, sc, sx, 0.3, 0.115), box(0.04, 0.46, 0.014, sc, sx, 0.3, -0.115), box(0.04, 0.014, 0.23, sc, sx, 0.528, 0));
+    }
+    torso.push(box(0.26, 0.03, 0.014, sc, 0, 0.36, 0.117));
+  }
   G.torso = merge(torso);
   G.head = headGeometry(o);
-  G.upperArm = merge([box(0.11, 0.3, 0.11, o.uniform, 0, -0.14, 0)]);
+  const arm = () => box(0.11, 0.3, 0.11, o.uniform, 0, -0.14, 0);
+  G.upperArmL = merge([arm(), ...patchGeometry(o.patch, 1)]);
+  G.upperArmR = merge([arm(), ...patchGeometry(o.patch, -1)]);
   G.forearm = merge([box(0.1, 0.26, 0.1, o.uniform, 0, -0.12, 0), box(0.08, 0.09, 0.08, o.gloves, 0, -0.29, 0)]);
   G.thigh = merge([box(0.15, 0.44, 0.16, o.pants, 0, -0.21, 0)]);
   G.shin = merge([box(0.13, 0.4, 0.14, o.pants, 0, -0.2, 0), ...footGeometry(o)]);
@@ -311,8 +380,8 @@ export class HumanoidRig {
         { bone: 'pelvis', geo: G.pelvis, zone: 'torso' },
         { bone: 'spine', geo: G.torso, zone: 'torso' },
         { bone: 'neck', geo: G.head, zone: 'head' },
-        { bone: 'shoulderL', geo: G.upperArm, zone: 'arm' },
-        { bone: 'shoulderR', geo: G.upperArm, zone: 'arm' },
+        { bone: 'shoulderL', geo: G.upperArmL, zone: 'arm' },
+        { bone: 'shoulderR', geo: G.upperArmR, zone: 'arm' },
         { bone: 'elbowL', geo: G.forearm, zone: 'arm' },
         { bone: 'elbowR', geo: G.forearm, zone: 'arm' },
         { bone: 'hipL', geo: G.thigh, zone: 'leg' },
@@ -346,6 +415,14 @@ export class HumanoidRig {
     this.material.userData.uInterior.value = v;
   }
 
+  // 관찰 모드 노란 윤곽 (0 이면 끔)
+  setHighlight(intensity) {
+    const u = this.material.userData.uHighlight;
+    if (!u) return;
+    if (intensity <= 0) u.value.setRGB(0, 0, 0);
+    else u.value.setRGB(1.0 * intensity, 0.78 * intensity, 0.12 * intensity);
+  }
+
   getMuzzleWorld(target) {
     this.muzzle.updateWorldMatrix(true, false);
     return target.setFromMatrixPosition(this.muzzle.matrixWorld);
@@ -371,7 +448,8 @@ export class HumanoidRig {
   }
 
   /**
-   * p: { speed, aim(0~1), aimPitch(rad), crouch(0~1), handsUp(0~1), cower(0~1) }
+   * p: { speed, aim(0~1), aimPitch(rad), crouch(0~1), handsUp(0~1), cower(0~1),
+   *      hideHands(0~1), handsMode('back'|'pocket'), shock(0~1), tear(0~1), reach(0~1), radioTalk(0~1) }
    * 무장 여부는 복장(outfit.rifle), 노인 자세는 outfit.elder 로 결정
    */
   animate(dt, p) {
@@ -465,6 +543,40 @@ export class HumanoidRig {
     if (cower > 0) {
       rX = lerp(rX, -2.45, cower); rY = lerp(rY, 0.3, cower); rZ = lerp(rZ, -0.55, cower); rE = lerp(rE, -2.2, cower);
       lX = lerp(lX, -2.45, cower); lY = lerp(lY, -0.3, cower); lZ = lerp(lZ, 0.55, cower); lE = lerp(lE, -2.2, cower);
+    }
+    // 3단계 행동 단서 자세
+    const hide = (p.hideHands || 0) * (1 - handsUp);
+    if (hide > 0) {
+      if (p.handsMode === 'pocket') {
+        // 주머니에 손: 손이 바지 앞쪽에 파묻혀 안 보임
+        rX = lerp(rX, -0.06, hide); rY = lerp(rY, 0, hide); rZ = lerp(rZ, 0.14, hide); rE = lerp(rE, -0.18, hide);
+        lX = lerp(lX, -0.06, hide); lY = lerp(lY, 0, hide); lZ = lerp(lZ, -0.14, hide); lE = lerp(lE, -0.18, hide);
+      } else {
+        // 등 뒤로 손: 앞에서 보면 손이 몸 뒤에 가려짐
+        rX = lerp(rX, 0.55, hide); rY = lerp(rY, 0, hide); rZ = lerp(rZ, 0.16, hide); rE = lerp(rE, -0.35, hide);
+        lX = lerp(lX, 0.55, hide); lY = lerp(lY, 0, hide); lZ = lerp(lZ, -0.16, hide); lE = lerp(lE, -0.35, hide);
+      }
+    }
+    const shock = (p.shock || 0) * (1 - handsUp);
+    if (shock > 0) {
+      // 충격으로 얼어붙음: 두 손을 가슴에 모으고 굳음 (웅크리지 않음)
+      rX = lerp(rX, -0.55, shock); rY = lerp(rY, 0.35, shock); rZ = lerp(rZ, 0.3, shock); rE = lerp(rE, -1.95, shock);
+      lX = lerp(lX, -0.55, shock); lY = lerp(lY, -0.35, shock); lZ = lerp(lZ, -0.3, shock); lE = lerp(lE, -1.95, shock);
+    }
+    const tear = p.tear || 0;
+    if (tear > 0) {
+      // 왼손을 가슴 앞으로 가로질러 오른팔 완장을 뜯음
+      lX = lerp(lX, -1.3, tear); lY = lerp(lY, -0.95, tear); lZ = lerp(lZ, -0.25, tear); lE = lerp(lE, -1.15, tear);
+    }
+    const reach = p.reach || 0;
+    if (reach > 0) {
+      // 오른손을 등 뒤 옷 속으로 (숨긴 총 꺼내기)
+      rX = lerp(rX, 0.8, reach); rY = lerp(rY, 0, reach); rZ = lerp(rZ, 0.38, reach); rE = lerp(rE, -1.05, reach);
+    }
+    const talk = p.radioTalk || 0;
+    if (talk > 0) {
+      // 왼손을 귀·입가로 (무전기에 대고 말함)
+      lX = lerp(lX, -1.55, talk); lY = lerp(lY, -0.45, talk); lZ = lerp(lZ, 0.2, talk); lE = lerp(lE, -2.35, talk);
     }
     this.shoulderR.rotation.set(rX, rY, rZ);
     this.elbowR.rotation.set(rE, 0, 0);

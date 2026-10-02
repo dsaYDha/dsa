@@ -16,6 +16,14 @@ export const Events = {
   OPERATION_DISMISSED: 'penalty:dismissed', // 경고 누적 → 작전 해임 (게임 오버)
   CIVILIAN_EVACUATED: 'civilian:evacuated', // { npc, position, time }
   AMBUSH: 'director:ambush', // { kind, spawnPoint }
+  // 3단계: 위장 적·관찰
+  DISGUISE_SPAWNED: 'disguise:spawned', // { npc, profile }
+  DISGUISE_REVEALING: 'disguise:revealing', // { npc, reason } — 예고 동작 시작 (장전음)
+  DISGUISE_REVEALED: 'disguise:revealed', // { npc, as, role, reason, ambush } — 정체를 드러냄 (ambush: 기습)
+  DISGUISE_KILLED: 'disguise:killed', // { npc, as } — 정체를 드러내기 전에 사살
+  DISGUISE_CALLED: 'disguise:called', // { npc } — 정찰형이 습격을 부름
+  OBSERVE_START: 'observe:start',
+  OBSERVE_FACT: 'observe:fact', // { npc, fact, distance } — 관찰로 사실 하나를 알아챔
   DIRECTOR_PHASE: 'director:phase',
   THREAT_LEVEL: 'director:threat',
   GAME_STATE: 'game:state',
