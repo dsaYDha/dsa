@@ -337,7 +337,7 @@ button.primary:hover { filter: brightness(1.12); }
 #compass .needle { position: absolute; left: 50%; bottom: 0; width: 2px; height: 5px; margin-left: -1px; background: #ffb36b; }
 
 #subtitles {
-  position: absolute; left: 50%; bottom: 12%; transform: translateX(-50%);
+  position: absolute; left: 50%; bottom: max(12%, 96px); transform: translateX(-50%);
   display: flex; flex-direction: column; align-items: center; gap: 4px; width: min(760px, calc(100vw - 32px));
 }
 #subtitles .sub {
@@ -419,3 +419,45 @@ button.primary:hover { filter: brightness(1.12); }
 @media (max-width: 640px) {
   #observe-memo { top: auto; bottom: 26%; right: 16px; }
 }
+
+/* ---------------- 4단계: 말 걸기·암구호 ---------------- */
+#subtitles .sub.player .who { color: #ffe08a; }
+#subtitles .sub.player { background: rgba(30, 24, 8, 0.6); }
+#dialog-menu {
+  position: absolute; left: 50%; bottom: 12px; transform: translateX(-50%); width: min(560px, max(360px, calc(100vw - 560px)));
+  background: rgba(10, 12, 14, 0.72); border: 1px solid rgba(255, 224, 138, 0.35); padding: 6px 10px 7px;
+}
+#dialog-menu .hd { font-size: 12px; color: var(--muted); margin-bottom: 4px; }
+#dialog-menu .hd .lbl { color: #ffe08a; font-weight: 700; letter-spacing: 0.08em; }
+#dialog-target { color: var(--fg); }
+#dialog-options { display: grid; grid-template-columns: 1fr 1fr; gap: 3px 14px; }
+#dialog-options .opt { font-size: 14px; line-height: 1.5; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+#dialog-options .opt kbd { margin-right: 6px; }
+#dialog-options .opt.off { color: rgba(232, 226, 214, 0.35); }
+#dialog-options .opt .note { margin-left: 6px; font-size: 11px; color: rgba(232, 226, 214, 0.45); border: 1px solid rgba(232, 226, 214, 0.25); padding: 0 4px; }
+#dialog-menu .timer { height: 2px; margin-top: 5px; background: rgba(255, 255, 255, 0.12); }
+#dialog-timer-bar { display: block; height: 100%; width: 100%; background: #ffe08a; }
+#dialog-hint {
+  position: absolute; left: 50%; bottom: 31%; transform: translateX(-50%); font-size: 14px; color: #ffe08a;
+  background: rgba(0, 0, 0, 0.5); padding: 4px 12px; opacity: 0; transition: opacity 0.4s; white-space: nowrap; max-width: calc(100vw - 32px);
+}
+#dialog-hint.show { opacity: 1; }
+#cs-card {
+  margin-top: 10px; padding: 5px 9px 6px; background: rgba(10, 12, 14, 0.55); border: 1px solid rgba(127, 178, 255, 0.3);
+  border-left: 3px solid rgba(127, 178, 255, 0.7); font-size: 13px; min-width: 196px;
+}
+#cs-card .hd { font-size: 11px; color: #7fb2ff; letter-spacing: 0.1em; margin-bottom: 2px; }
+#cs-card .row { line-height: 1.55; }
+#cs-card .k { display: inline-block; width: 70px; color: var(--muted); font-size: 12px; }
+#cs-card b { color: #fff; }
+#cs-card s { color: rgba(232, 226, 214, 0.45); margin-left: 6px; }
+#cs-card .prev { font-size: 12px; padding-left: 70px; }
+#cs-card.flash { animation: csflash 0.8s ease-in-out 4; }
+@keyframes csflash { 0%, 100% { border-color: rgba(127, 178, 255, 0.3); background: rgba(10, 12, 14, 0.55); } 50% { border-color: #ffe08a; background: rgba(80, 64, 10, 0.6); } }
+.settings label.check .note { color: var(--muted); font-size: 12px; }
+/* 4단계: 브리핑이 길어져 시작 화면 패널을 넓힘 (720p 에서도 시작 버튼이 스크롤 없이 보이게) */
+#screen-start .panel { width: min(820px, 100%); padding: 20px 26px; }
+#screen-start .title { font-size: 40px; }
+#screen-start .story { margin-bottom: 10px; font-size: 14px; }
+#screen-start .briefing { margin-bottom: 12px; font-size: 12.5px; line-height: 1.5; }
+#screen-start .controls { grid-template-columns: repeat(auto-fill, minmax(118px, 1fr)); margin-bottom: 12px; font-size: 12px; }

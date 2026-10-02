@@ -18,9 +18,12 @@ import { PenaltySystem } from '../game/PenaltySystem.js';
 import { ObservationSystem } from '../game/Observation.js';
 import { Combat } from '../game/Combat.js';
 import { VoiceSystem } from '../dialogue/VoiceSystem.js';
+import { CountersignSystem } from '../dialogue/Countersign.js';
+import { DialogueSystem } from '../dialogue/DialogueSystem.js';
 import { HUD } from '../ui/HUD.js';
 import { Menus } from '../ui/Menus.js';
 import { DebugOverlay } from '../ui/DebugOverlay.js';
+import * as DisguiseMod from '../npc/Disguise.js';
 
 const _v = new THREE.Vector3();
 const _f = new THREE.Vector3();
@@ -78,6 +81,7 @@ export class Game {
       if (document.hidden && this.state === 'playing') this.pause();
     });
 
+    this._disguiseMod = DisguiseMod;
     this._last = performance.now();
     this._menuAngle = 0;
     this._gunfireT = 6;
@@ -127,6 +131,8 @@ export class Game {
     this.score = new ScoreSystem(this);
     this.penalty = new PenaltySystem(this);
     this.observation = new ObservationSystem(this);
+    this.countersign = new CountersignSystem(this); // 4단계: 암구호·실내 기준수·아군 부대
+    this.dialogue = new DialogueSystem(this); // 4단계: 말 걸기 (E, 1~4)
     this.hud = new HUD(this);
 
     // 총기 손전등 (월드 조명, 세기만 조절 — 광원 수 고정)
@@ -168,6 +174,7 @@ export class Game {
     this.input.clear();
     this.audio.resume();
     this.events.emit(Events.GAME_STATE, { state: this.state });
+    this.countersign.start(); // 오늘의 암구호 (작전 무전 + HUD 카드)
     // 포인터 락이 안 걸리면 클릭 안내 화면으로
     if (!this.noLock) {
       setTimeout(() => {
@@ -183,6 +190,8 @@ export class Game {
     this.score.reset();
     this.penalty.reset();
     this.observation.reset();
+    this.countersign.reset();
+    this.dialogue.reset();
     this.voice.clear();
     this.weapon.reset();
     this.hud.reset();
@@ -270,6 +279,12 @@ export class Game {
     Object.assign(r, this.penalty.stats());
     r.anomaliesFound = this.observation.anomaliesFound;
     r.factsFound = this.observation.factsFound;
+    const ds = this.dialogue.stats;
+    r.dialogueQuestions = ds.questions;
+    r.dialogueTalks = ds.talks;
+    r.dialogueExposed = ds.exposed;
+    r.dialogueConfirmed = ds.confirmed;
+    r.dialogueAmbushed = ds.ambushed;
     r.reason = this.endReason || 'killed';
     const updated = this.records.submit(r);
     this.lastResult = r;
@@ -289,6 +304,8 @@ export class Game {
     this.input.exitLock();
     this.input.captureKeys = false;
     this.observation.reset();
+    this.dialogue.reset();
+    this.countersign.reset();
     this.audio.setFocus(0);
     this.npcs.clear();
     this.effects.clear();
@@ -349,6 +366,8 @@ export class Game {
     this.runTime += dt;
     const p = this.player;
     this.observation.update(dt, this.input); // 관찰 모드 먼저 (이동·감도·사격 가능 여부에 반영)
+    this.dialogue.update(dt, this.input); // 말 걸기 (사격하면 WEAPON_FIRED 로 대화가 끝남)
+    this.countersign.update(dt);
     p.update(dt, this.input, this.weapon);
     this.weapon.update(dt, this.input, p);
     this._updateFov();
@@ -474,5 +493,30 @@ export class Game {
   debugTeleport(x, y, z, yaw) {
     this.player.teleport(x, y, z);
     if (yaw != null) this.player.yaw = yaw;
+  }
+
+  /**
+   * 테스트용 즉시 생성 (상한·예고음 무시, 플레이어 근처 숨은 출현 지점)
+   * kind: 'disguised'(o: { as, skill, role, mode }) | 'ally'(o: { size, decoy }) | 'civilian'(o: { decoy }) | 'enemy'
+   * o.at: { x, y, z } 를 주면 그 근처 노드에 생성
+   */
+  debugSpawn(kind, o = {}) {
+    const d = this.director;
+    const look = kind === 'disguised' ? o.as || 'ally' : kind;
+    let sp;
+    if (o.at) {
+      const n = this.world.nav.nearest(o.at.x, o.at.y ?? this.player.feet.y, o.at.z, (q) => !q.removed, 12);
+      if (!n) return null;
+      sp = { x: n.x, y: n.y, z: n.z, nodeId: n.id, buildingId: n.buildingId ?? -1, type: n.type };
+    } else sp = d.pickSpawnPoint(look === 'enemy' ? 'rifleman' : look, { distRange: o.distRange || [8, 22] });
+    if (!sp) return null;
+    if (kind === 'disguised') {
+      const { rollDisguiseProfile } = this._disguiseMod;
+      const profile = rollDisguiseProfile(look, Math.max(2, d.threat), { skill: o.skill, role: o.role || 'ambusher', mode: o.mode });
+      return this.npcs.spawnDisguised({ as: look, spawnPoint: sp, entrance: 'walkOut', threat: Math.max(2, d.threat), profile });
+    }
+    if (kind === 'ally') return this.npcs.spawnAllySquad({ spawnPoint: sp, entrance: 'walkOut', size: o.size || 2, decoy: o.decoy });
+    if (kind === 'civilian') return this.npcs.spawnCivilian({ spawnPoint: sp, entrance: o.entrance || 'cross', decoy: o.decoy });
+    return this.npcs.spawnEnemy({ type: o.type || 'rifleman', spawnPoint: sp, entrance: 'walkOut', threat: d.threat });
   }
 }

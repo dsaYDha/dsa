@@ -1,4 +1,4 @@
-// 화면 전환 — 로딩, 시작(제목·조작법·시드·시작 버튼), 일시정지(감도·시야각·볼륨), 결과(점수·통계·최고 기록)
+// 화면 전환 — 로딩, 시작(제목·조작법·시드·시작 버튼), 일시정지(감도·시야각·볼륨·TTS·암구호 카드), 결과(점수·통계·최고 기록)
 import { CONFIG } from '../config.js';
 
 const $ = (id) => document.getElementById(id);
@@ -68,6 +68,14 @@ export class Menus {
       if (g.voice) g.voice.setSpeech(S.speech);
       this.updateSpeechNote();
     });
+
+    // 4단계: 암구호 카드 표시 (난이도 옵션 — 끄면 무전을 외워서 플레이)
+    const cc = $('set-cscard');
+    cc.checked = S.countersignCard !== false;
+    cc.addEventListener('change', () => {
+      S.countersignCard = cc.checked;
+      S.save();
+    });
   }
 
   updateSpeechNote() {
@@ -132,6 +140,10 @@ export class Menus {
       ['위장 적 사전 식별 사살', `${r.disguisedKills ?? 0}명${r.evidenceKills ? ` (근거 ${r.evidenceKills})` : ''}`, false],
       ['위장 적에게 기습당함', `${r.ambushedBy ?? 0}회`, false, (r.ambushedBy ?? 0) > 0],
       ['관찰로 찾은 이상 단서', `${r.anomaliesFound ?? 0}개`, false],
+      ['문답 횟수', `${r.dialogueQuestions ?? 0}회 (말 걸기 ${r.dialogueTalks ?? 0}회)`, false],
+      ['문답으로 찾아낸 위장 적', `${r.dialogueExposed ?? 0}명`, false],
+      ['문답으로 확인한 진짜 인물', `${r.dialogueConfirmed ?? 0}명`, false],
+      ['문답 중 기습당함', `${r.dialogueAmbushed ?? 0}회`, false, (r.dialogueAmbushed ?? 0) > 0],
     ];
     $('result-stats').innerHTML = rows
       .map(([k, v, best, isBad]) => `<div class="row${isBad ? ' bad' : ''}"><span>${k}</span><b>${v}${best ? ' <em>신기록</em>' : ''}</b></div>`)

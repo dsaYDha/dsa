@@ -267,7 +267,7 @@ export class NPCManager {
         if (sq.ambushShoutT <= 0) {
           sq.ambushShoutT = null;
           const m = sq.alive[0];
-          if (m) game.voice.say({ speaker: '아군', text: '아군이다! 쏘지 마!', channel: 'shout', priority: 2, voice: m.voice });
+          if (m) game.voice.say({ speaker: m.talkLabel, text: '아군이다! 쏘지 마!', channel: 'shout', priority: 2, voice: m.voice });
         }
       }
     }
@@ -377,7 +377,8 @@ export class NPCManager {
       if (d > maxDistance) continue;
       _w.subVectors(_v, cam.position).normalize();
       const ang = Math.acos(THREE.MathUtils.clamp(_w.dot(dir), -1, 1));
-      if (ang < bestAng && game.world.hasLineOfSight(cam.position, _v)) {
+      // 가슴이 가려져도 머리가 보이면 대상 (낮은 엄폐물 뒤에 웅크린 인물에게도 관찰·말 걸기 가능)
+      if (ang < bestAng && (game.world.hasLineOfSight(cam.position, _v) || game.world.hasLineOfSight(cam.position, n.getHeadPosition(_w)))) {
         bestAng = ang;
         best = { npc: n, distance: d };
       }
@@ -395,7 +396,13 @@ export class NPCManager {
     if (!this.apparent.civilian.length || !game.player.alive) return;
     if (game.observation && game.observation.weaponDown) return;
     const a = this.getAimedNPC({ maxDistance: CONFIG.civilian.aimReactDist, coneDeg: 4 });
-    if (a && a.npc.apparentFaction === 'civilian' && a.npc.onAimedAt) a.npc.onAimedAt(step);
+    if (!a || a.npc.apparentFaction !== 'civilian') return;
+    // 4단계: 말을 거는 상대는 '겨눔'이 아니라 대화 중 — 손 들기 반응 없음 ("손 들어!"로 따로 시험). 위장 적은 궁지 압박만 누적
+    if (game.dialogue && game.dialogue.target === a.npc) {
+      if (a.npc.disguised) a.npc.ctl.onTalkAimed(step);
+      return;
+    }
+    if (a.npc.onAimedAt) a.npc.onAimedAt(step);
   }
 
   // 민간인 사망 → 주변 민간인 공황 (흩어져 도망) + 디렉터에 공황 시간 통보

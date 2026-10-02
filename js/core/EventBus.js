@@ -24,6 +24,12 @@ export const Events = {
   DISGUISE_CALLED: 'disguise:called', // { npc } — 정찰형이 습격을 부름
   OBSERVE_START: 'observe:start',
   OBSERVE_FACT: 'observe:fact', // { npc, fact, distance } — 관찰로 사실 하나를 알아챔
+  // 4단계: 말 걸기·문답
+  DIALOGUE_OPEN: 'dialogue:open', // { npc, indoor, first, firstIndoor }
+  DIALOGUE_ASK: 'dialogue:ask', // { npc, question: 'password'|'indoor'|'unit'|'lower'|'hands'|'id'|'evac', number? }
+  DIALOGUE_ANSWER: 'dialogue:answer', // { npc, question, outcome, fail } — 통계·테스트용 (화면에는 판정을 보여주지 않음)
+  DIALOGUE_CLOSE: 'dialogue:close', // { npc, reason: 'timeout'|'key'|'fired'|'lost'|'dead'|'revealed'|'player' }
+  COUNTERSIGN_CHANGED: 'countersign:changed', // { current: {challenge, reply}, previous, indoorBase, prevIndoorBase, initial }
   DIRECTOR_PHASE: 'director:phase',
   THREAT_LEVEL: 'director:threat',
   GAME_STATE: 'game:state',

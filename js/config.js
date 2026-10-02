@@ -4,7 +4,7 @@
 // 단위: 거리 m, 시간 초, 각도는 별도 표기가 없으면 '도(deg)'
 
 export const CONFIG = {
-  version: '0.3.0 (3단계: 위장 적·관찰)',
+  version: '0.4.0 (4단계: 말 걸기·문답)',
 
   // ------------------------------------------------------------------
   // 키 설정 (KeyboardEvent.code 기준 — 한글 IME 상태와 무관하게 동작)
@@ -21,12 +21,12 @@ export const CONFIG = {
     reload: ['KeyR'],
     flashlight: ['KeyF'],
     observe: ['KeyQ'], // 3단계: 관찰 모드 (누르고 있기)
+    interact: ['KeyE'], // 4단계: 말 걸기 ("정지!" + 대화 메뉴) / 메뉴 닫기
+    dialog1: ['Digit1', 'Numpad1'], // 4단계: 문답 선택지 1~4
+    dialog2: ['Digit2', 'Numpad2'],
+    dialog3: ['Digit3', 'Numpad3'],
+    dialog4: ['Digit4', 'Numpad4'],
     debug: ['Backquote'],
-  },
-  // 4단계(말 걸기·문답)용으로 비워 둔 키 — 어떤 기능에도 묶지 않음
-  reservedKeys: {
-    interact: ['KeyE'], // 4단계: 말 걸기
-    dialog1: ['Digit1'], dialog2: ['Digit2'], dialog3: ['Digit3'], dialog4: ['Digit4'], // 4단계: 문답 선택지
   },
   mouse: { fire: 0, aim: 2 }, // 0=좌클릭, 2=우클릭
 
@@ -169,7 +169,7 @@ export const CONFIG = {
   // 먼 거리에선 거의 구분되지 않고 가까이서만 보이는 차이
   gearSets: {
     enemy: { helmetStyle: 'enemy', rifleStyle: 'curved', footwear: 'combat' }, // 챙 있는 둥근 헬멧, 굽은 탄창·나무 개머리판
-    ally: { helmetStyle: 'ally', rifleStyle: 'straight', footwear: 'combat', patch: 'shield' }, // 낮고 넓은 헬멧(뒷목 가리개), 직선 탄창·검은 개머리판, 어깨 파란 방패 패치
+    ally: { helmetStyle: 'ally', rifleStyle: 'straight', footwear: 'combat', patch: 'shield' }, // 낮고 넓은 헬멧(뒷목 가리개), 직선 탄창·검은 개머리판, 어깨 파란 부대 패치(부대마다 모양이 다름 — dialogue.units)
   },
 
   // ------------------------------------------------------------------
@@ -353,6 +353,59 @@ export const CONFIG = {
     ambientDuck: 0.4, // 주변 소리 줄임
   },
 
+  // ------------------------------------------------------------------
+  // 4단계: 말 걸기·구두 문답 — 게임은 멈추지 않고(실시간) 총도 계속 들고 있다. 쏘면 대화가 끝난다
+  // 대사 문장은 dialogue/DialogueLines.js, 숙련도별 반응 규칙은 dialogue/Responses.js
+  // ------------------------------------------------------------------
+  dialogue: {
+    rangeOutdoor: 20, // E 로 말을 걸 수 있는 거리 (실외)
+    rangeIndoor: 10, // 플레이어나 대상이 건물 안이면
+    coneDeg: 5, // 화면 중앙에서 이 각도 안의 인물
+    menuTimeout: 4, // 입력이 없으면 메뉴가 닫힘 (대답이 끝난 뒤부터 다시 셈)
+    losGrace: 0.6, // 대상이 이 시간 넘게 시야에서 사라지면 닫힘
+    leaveExtra: 8, // 대상이 (말 걸기 거리 + 이만큼) 멀어지면 닫힘
+    holdTime: 1.2, // 대화 중 멈춰 선 인물이 대화가 끝난 뒤 이만큼 더 서 있음
+    // 아군 부대 — 작전 브리핑에 표시. 진짜 아군은 분대마다 한 부대, 어깨 패치 모양이 부대와 일치
+    units: [
+      { name: '철방패대대', patch: 'shield', patchName: '파란 방패' },
+      { name: '샛별중대', patch: 'star', patchName: '파란 별' },
+      { name: '봉우리대대', patch: 'triangle', patchName: '파란 삼각형' },
+    ],
+    // 암구호 (문어 → 답어): 위협 단계가 오를 때마다(약 1분) 교체. 단어 쌍은 DialogueLines.js PAIRS
+    countersign: {
+      staleWindow: 20, // 교체 직후 이 시간 동안은 이전 암구호도 카드에 취소선으로 표시
+      realStaleChance: 0.3, // 그 사이 진짜 아군이 이전 답어를 말했다가 곧 정정할 확률 (오판 유도)
+      correctionDelay: [0.9, 1.4],
+    },
+    // 실내 확인 문답: 플레이어가 외친 수 + 상대의 답 = 실내 기준수. 아군 부대 안에서만 공유되어 위장 적은 모른다
+    indoor: { base: [7, 12], fakeGuessChance: 0.1 },
+    answerDelay: [0.5, 1.0], // 진짜 아군의 암구호·소속 대답
+    indoorDelay: [0.35, 0.65], // 진짜 아군의 실내 문답 대답 (항상 즉시 정답)
+    hesitate: [1.3, 2.3], // 머뭇거린 뒤 대답까지
+    annoy: { window: 30, maxQuestions: 3 }, // 진짜 아군: 30초 안에 세 번 넘게 물으면 짜증 (대답이 늦어짐, 페널티 없음)
+    annoyExtraDelay: [1.2, 1.8],
+    // 위장 적의 '정지!' 반응 확률 [멈춤, 못 들은 척 계속 걸음, 도주] — 숙련도 0/1/2. 진짜는 항상 멈춤
+    halt: [[0.3, 0.35, 0.35], [0.6, 0.3, 0.1], [0.95, 0.05, 0]],
+    // 숙련도 0 암구호 반응 [머뭇거린 뒤 엉뚱한 단어, 도주, 바로 기습]
+    skill0Password: [0.5, 0.25, 0.25],
+    skill0RevealOnStuck: 0.35, // 숙련도 0 이 문답에서 막히면 즉시 정체를 드러낼 확률 (예고 동작은 유지)
+    skill0LowerRefuse: 0.6, // 숙련도 0 의 "총 내려!" 거부 확률 (나머지는 기습)
+    skill0HandsFlee: 0.4, // 숙련도 0 의 "손 들어!" 도주 확률 (나머지는 거부)
+    skill2UnitMismatch: 0.5, // 숙련도 2 가 올바른 부대명을 대지만 자기 어깨 패치와 다른 부대를 댈 확률
+    // 숙련도 1~2 가 '들킨 것 같으면': 기습 조건이 빨라지거나(boost) 거리를 벌려 도주
+    // boost: 붙어 있으면 revealIn 초 안에 기습('오래 붙어 있음'을 앞당김) + 기회(등·재장전) 필요 시간 ×oppMul
+    suspect: { boostChance: 0.55, boostTime: 12, revealIn: [3, 6], oppMul: 0.5, pressureQuestions: 3 },
+    questionPressure: 2.5, // 위장 적에게 질문 한 번마다 '오래 붙어 있음' 기습까지 남은 시간이 이만큼 줄어듦 (초, 단 남은 시간이 minLeft 아래로는 안 줄임)
+    pressureMinLeft: 2.5,
+    aimPanicMulInTalk: 0.5, // 숙련도 1~2 가짜 민간인: 대화 중엔 겨눠져도 덜 당황 (궁지 기습 누적 배율)
+    flee: { dist: [24, 40], hideTime: [8, 15], callChance: 0.5 }, // 도주 → 숨었다가 다시 접근하거나 습격을 부름
+    lowered: { real: 7, fake: 9, backAngle: 70, oppMul: 0.8 }, // "총 내려!" 지속 시간, 위장 적은 그사이 시선을 돌리면 기습 조건이 빨리 참
+    hands: { holdReal: 4, late: [1.1, 1.8], lag: [0.7, 1.2] }, // 손 들기 유지 / 숙련도 1 늦게 듦 / 숙련도 2 한 손이 늦음
+    idShow: 3.5, // 신분증을 보여주는 시간
+    fakeEvac: { walk: [2.0, 3.6], returnChance: 0.5 }, // 위장 민간인: 대피로로 가는 척하다 멈추거나 되돌아옴
+    hintTime: 6, // 첫 안내 문구 표시 시간
+  },
+
   // 자막·음성
   voice: {
     maxLines: 3,
@@ -438,7 +491,7 @@ export const CONFIG = {
     assist: 30, // 플레이어가 먼저 맞힌 적을 아군이 마무리
     evacuation: 25, // 민간인 대피 성공
     disguiseId: 200, // 정체를 드러내기 전에 위장 적 사살 ("위장 적 식별")
-    evidence: 100, // 그 위장 적에게서 관찰로 이상 단서를 1개 이상 찾은 뒤 사살 ("근거 있는 판단")
+    evidence: 100, // 그 위장 적에게서 관찰로 이상 단서를 찾았거나(3단계) 문답에서 틀리거나 머뭇거린 뒤(4단계) 사살 ("근거 있는 판단")
   },
 
   audio: {
@@ -448,7 +501,7 @@ export const CONFIG = {
   },
 
   // 기본 설정값 (일시정지 메뉴에서 변경, localStorage 저장)
-  defaults: { sensitivity: 1.0, fov: 78, volume: 0.8, speech: false },
+  defaults: { sensitivity: 1.0, fov: 78, volume: 0.8, speech: false, countersignCard: true }, // countersignCard: 4단계 암구호 카드 항상 표시(기본) / 숨김(외워서 플레이)
   limits: { sensitivity: [0.2, 3.0], fov: [60, 100], volume: [0, 1] },
 
   debug: { showNavGraph: false },

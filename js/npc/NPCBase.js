@@ -2,6 +2,8 @@
 // trueFaction: 실제 소속 (enemy / ally / civilian) — 점수·페널티·AI 적대 판정은 이것 기준
 // apparentFaction: 겉보기 소속 (표식·복장) — 3단계 위장 적은 ally/civilian 으로 보이다가 정체를 드러내면 enemy
 // 3단계: 행동 기록(behavior) — 실제로 일어난 일만 남겨 관찰 모드가 '사실'로 꺼내 본다 (npc/Clues.js)
+// 4단계: 말 걸기 공통 — 멈춰 서기(talkHoldT), 총구 내리기(lowerT), 신분증 내밀기(cardT), 손 들면 옷이 올라감(shirtLift),
+//        자막 화자 라벨은 겉모습 기준(talkLabel), 문답에서 틀리거나 머뭇거렸는지(dialogueFailed — 점수 '근거 있는 판단')
 import * as THREE from 'three';
 import { CONFIG } from '../config.js';
 import { Events } from '../core/EventBus.js';
@@ -9,6 +11,7 @@ import { HumanoidRig } from './HumanoidRig.js';
 import { Insignia } from './Insignia.js';
 import { soldierOutfit, civilianOutfit, describeEquipment } from './Outfits.js';
 import { factsFor } from './Clues.js';
+import { SPEAKER } from '../dialogue/DialogueLines.js';
 
 let NEXT_ID = 1;
 const _v = new THREE.Vector3();
@@ -72,6 +75,16 @@ export class NPCBase {
     this.tear = 0; // 0~1 표식 뜯기 (위장 적 정체 드러내기)
     this.reach = 0; // 0~1 등 뒤 숨긴 총 꺼내기
     this.radioTalk = 0; // 0~1 무전기에 대고 말하기
+    // 4단계 자세·대화 상태
+    this.handsLag = 0; // 0~1 오른손만 늦게 듦
+    this.lowered = 0; // 0~1 총구를 내림
+    this.showCard = 0; // 0~1 신분증을 내밂
+    this.talkHoldT = 0; // 대화 중 멈춰 서서 플레이어를 바라봄 (남은 시간)
+    this.lowerT = 0; // "총 내려!" 남은 시간
+    this.cardT = 0; // 신분증 보여주는 남은 시간
+    this.unit = null; // 진짜 아군의 부대 (config.dialogue.units)
+    this.dialogueFailed = false; // 문답에서 틀리거나 머뭇거림 (위장 적만 — 사살 시 '근거 있는 판단')
+    this.questionTimes = []; // 받은 질문 시각 (진짜 아군의 짜증 판정)
     this.behavior = new Map(); // 행동 기록: key → { first, t, n, variant }
     this.observed = null; // 관찰 기록: { found: Map(key → fact), anomalies, outlineUntil }
     this.playerDamaged = false; // 플레이어에게 한 번이라도 맞았는지 (어시스트 판정)
@@ -143,6 +156,62 @@ export class NPCBase {
   /** 겉보기에 적(빨간 표식)인지 — 아군·민간인 AI 는 이것만 보고 판단한다 (위장에 속음) */
   get looksHostile() {
     return this.apparentFaction === 'enemy';
+  }
+
+  // ------------------------------------------------------------------
+  // 4단계: 말 걸기 공통
+  // ------------------------------------------------------------------
+  /** 자막 화자 라벨 — 겉모습만 ([파란 표식 병사] / [민간인]) */
+  get talkLabel() {
+    return this.apparentFaction === 'civilian' ? SPEAKER.civilian : SPEAKER.ally;
+  }
+
+  /** 대화용 자막 (겉모습 라벨, 자기 목소리) */
+  sayTalk(text, priority = 3) {
+    this.game.voice.say({ speaker: this.talkLabel, text, channel: this.apparentFaction === 'civilian' ? 'civilian' : 'shout', priority, voice: this.voice, force: true, nodedupe: true });
+  }
+
+  /** 멈춰 서서 플레이어를 바라봄 (각 AI 가 think 에서 talkHoldT 를 확인) */
+  holdForTalk(sec) {
+    this.talkHoldT = Math.max(this.talkHoldT, sec);
+  }
+
+  lowerWeapon(sec) {
+    this.lowerT = Math.max(this.lowerT, sec);
+  }
+
+  presentCard(sec) {
+    this.cardT = Math.max(this.cardT, sec);
+  }
+
+  /** 질문을 받은 시각 기록 → 최근 window 초 안에 받은 질문 수 */
+  noteQuestion(window) {
+    const t = this.game.time;
+    this.questionTimes.push(t);
+    while (this.questionTimes.length && t - this.questionTimes[0] > window) this.questionTimes.shift();
+    return this.questionTimes.length;
+  }
+
+  _updateTalkPose(dt) {
+    this.talkHoldT = Math.max(0, this.talkHoldT - dt);
+    this.lowerT = Math.max(0, this.lowerT - dt);
+    this.cardT = Math.max(0, this.cardT - dt);
+    this.lowered += ((this.lowerT > 0 ? 1 : 0) - this.lowered) * Math.min(1, dt * 5);
+    this.showCard += ((this.cardT > 0 ? 1 : 0) - this.showCard) * Math.min(1, dt * 6);
+    this.handsLag = Math.max(0, this.handsLag - dt * (this._lagRate || 0));
+    if (this.cardT > 0 || this.showCard > 0.05) this.rig.setCard(this.showCard > 0.35);
+    // 손을 들면 옷이 올라감 (사복 차림만 — 허리띠, 허리춤에 숨긴 무기가 드러남)
+    const o = this.rig.outfit;
+    if (o.top !== 'uniform') {
+      const lift = this.handsUp > 0.6 ? true : this.handsUp < 0.4 ? false : !!o.shirtLift;
+      if (lift !== !!o.shirtLift) this.rig.applyOutfit({ ...o, shirtLift: lift });
+    }
+  }
+
+  /** 한 손(오른손)이 늦게 올라오게 — sec 동안 늦게 */
+  lagHands(sec) {
+    this.handsLag = 1;
+    this._lagRate = 1 / Math.max(0.1, sec);
   }
 
   // 3단계: 겉보기 소속 변경 (표식 색·형태 교체, 필요하면 복장도 교체)
@@ -346,6 +415,7 @@ export class NPCBase {
   // ------------------------------------------------------------------
   update(dt) {
     if (this.dying) {
+      if (this.rig.card) this.rig.setCard(false);
       this.deathT += dt;
       const C = CONFIG.npc;
       if (this.deathT > C.corpseTime) {
@@ -357,6 +427,7 @@ export class NPCBase {
       return;
     }
     this.think(dt);
+    this._updateTalkPose(dt);
     // 회전 보간
     let d = this.targetYaw - this.yaw;
     d = Math.atan2(Math.sin(d), Math.cos(d));
@@ -371,6 +442,7 @@ export class NPCBase {
     this.rig.animate(dt, {
       speed: this.curSpeed, aim: this.aim, aimPitch: this.aimPitch, crouch: this.crouch, handsUp: this.handsUp, cower: this.cower,
       hideHands: this.hideHands, handsMode: this.handsMode, shock: this.shock, tear: this.tear, reach: this.reach, radioTalk: this.radioTalk,
+      handsLag: this.handsLag, lowered: this.lowered, showCard: this.showCard,
     });
   }
 

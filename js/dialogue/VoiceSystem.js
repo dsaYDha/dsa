@@ -1,11 +1,11 @@
 // 자막·음성 모듈 — 무전·외침을 화면 하단 자막으로 출력 (화자 라벨, 겹치면 큐 처리)
 // 선택: Web Speech API(speechSynthesis, ko-KR) 음성. 화자마다 음높이·속도를 다르게, 한국어 음성이 없으면 자막만.
-// 게임 로직과 독립적인 모듈 — 4단계 대화 시스템에서 그대로 재사용한다.
+// 게임 로직과 독립적인 모듈 — 4단계 대화 시스템(dialogue/DialogueSystem.js)이 그대로 재사용한다 (플레이어 대사는 channel 'player').
 //
 // 사용:  voice.say({ speaker: '아군 무전', text: '적 발견!', channel: 'radio', priority: 1, voice: { id, pitch, rate } })
 //        voice.mute('radio', 30)  /  voice.update(dt)  /  voice.setSpeech(true)
 
-const CHANNEL_CLASS = { radio: 'radio', shout: 'shout', civilian: 'civilian', system: 'system', enemy: 'enemy' };
+const CHANNEL_CLASS = { radio: 'radio', shout: 'shout', civilian: 'civilian', system: 'system', enemy: 'enemy', player: 'player' };
 
 export class VoiceSystem {
   /**
@@ -61,7 +61,8 @@ export class VoiceSystem {
 
   /**
    * 대사 출력 요청
-   * @param {object} line { speaker, text, channel='shout', priority=1, voice={id,pitch,rate}, force=false, duration }
+   * @param {object} line { speaker, text, channel='shout', priority=1, voice={id,pitch,rate}, force=false, duration, nodedupe=false }
+   *   nodedupe: 같은 문장 반복 억제를 건너뜀 (4단계 문답처럼 같은 말을 일부러 되풀이할 때)
    * @returns {boolean} 큐에 들어갔는지
    */
   say(line) {
@@ -69,7 +70,7 @@ export class VoiceSystem {
     if (!line.force && this.isMuted(channel)) return false;
     const key = `${line.speaker}|${line.text}`;
     const last = this.recent.get(key);
-    if (last != null && this.time - last < this.dedupeWindow) return false;
+    if (!line.nodedupe && last != null && this.time - last < this.dedupeWindow) return false;
     this.recent.set(key, this.time);
     const item = {
       speaker: line.speaker || '',

@@ -2,6 +2,8 @@
 // · 사격 불가, Q 를 떼면 총을 다시 드는 데 0.3초 / 시야 약 2배 확대·가장자리 어둡게·주변 소리 줄이고 심장 소리
 // · 대상: 화면 중앙에 가장 가까운 NPC (2단계 조준 유틸 getAimedNPC 재사용)
 // · 약 0.5초마다 사실 하나 (멀수록 느림, 가려지면 불가). 장비 사실은 거리 제한 + 어두운 실내에선 손전등이 비춰야 보임
+// · 장비 사실은 보는 각도도 따진다: 등 뒤 총몸은 뒤·옆에서, 허리춤·무전기는 앞에서, 어깨 패치는 옆·비스듬히 (4단계 전 수정)
+//   — 각도 때문에 안 보이는 사실은 상태 문구에도 드러내지 않는다 (있다는 것 자체가 단서가 되지 않게)
 // · 행동 사실은 그 NPC 에게 실제로 일어난 일만 (npc.behavior)
 // · 메모에는 사실만 쓴다 — "적입니다" 같은 결론은 절대 쓰지 않는다. 이상한 사실을 하나라도 찾으면 8초간 노란 윤곽
 // · 관찰 중에도 게임은 실시간 — 가까운 위장 적에게는 기습 기회가 된다 (npc/Disguise.js)
@@ -82,6 +84,21 @@ export class ObservationSystem {
     return THREE.MathUtils.radToDeg(Math.acos(THREE.MathUtils.clamp(_f.dot(_v), -1, 1))) < F.angle;
   }
 
+  // 그 방향의 장비가 지금 각도에서 보이는지 (rel: 0° = 인물의 정면에서 봄, 180° = 등 뒤에서 봄)
+  _viewOK(npc, view) {
+    if (!view || view === 'any') return true;
+    const cam = this.game.camera.position;
+    const dx = cam.x - npc.position.x;
+    const dz = cam.z - npc.position.z;
+    const d = Math.hypot(dx, dz) || 1;
+    const cos = (dx * Math.sin(npc.yaw) + dz * Math.cos(npc.yaw)) / d;
+    const rel = THREE.MathUtils.radToDeg(Math.acos(THREE.MathUtils.clamp(cos, -1, 1)));
+    if (view === 'front') return rel < 100;
+    if (view === 'back') return rel > 75;
+    if (view === 'side') return rel > 25 && rel < 140;
+    return true;
+  }
+
   _observe(dt) {
     const O = CONFIG.observe;
     const g = this.game;
@@ -104,8 +121,9 @@ export class ObservationSystem {
     const gearOK = lit && d <= O.gearMaxDist;
     const all = npc.observationFacts();
     const near = d <= O.gearMaxDist;
-    const avail = all.filter((f) => !ob.found.has(f.key) && (f.kind === 'behavior' || gearOK || (f.glow && near)));
-    const gearLeft = all.some((f) => !ob.found.has(f.key) && f.kind === 'gear' && !(f.glow && near));
+    const angled = (f) => f.kind !== 'gear' || this._viewOK(npc, f.view);
+    const avail = all.filter((f) => !ob.found.has(f.key) && angled(f) && (f.kind === 'behavior' || gearOK || (f.glow && near)));
+    const gearLeft = all.some((f) => !ob.found.has(f.key) && f.kind === 'gear' && angled(f) && !(f.glow && near));
     if (!avail.length) {
       this.progress = 0;
       if (gearLeft && !lit) this.status = '어두워서 장비가 안 보임 — 손전등(F)';

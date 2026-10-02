@@ -3,6 +3,7 @@
 // 2단계: 어시스트 +30 (플레이어가 먼저 맞힌 적을 아군이 마무리), 민간인 대피 +25. 점수는 음수까지 내려갈 수 있음
 // 3단계: 정체를 드러내기 전에 위장 적 사살 +200 "위장 적 식별", 그 전에 관찰로 이상 단서를 찾았으면 +100 "근거 있는 판단"
 //        (드러낸 뒤 사살은 일반 적과 같음). 콤보 배율은 모두 적용. 위장 적에게 기습당한 횟수도 집계
+// 4단계: 문답에서 틀리거나 머뭇거린 위장 적(npc.dialogueFailed)도 '근거 있는 판단'으로 인정. 문답으로 진짜를 확인한 건 점수 없음(통계만)
 import { CONFIG } from '../config.js';
 import { Events } from '../core/EventBus.js';
 
@@ -116,7 +117,7 @@ export class ScoreSystem {
       labels.push('위장 적 식별');
       this.disguisedKills++;
       const ob = e.victim.observed;
-      if (ob && ob.anomalies > 0) {
+      if ((ob && ob.anomalies > 0) || e.victim.dialogueFailed) {
         pts += S.evidence;
         labels.push('근거 있는 판단');
         this.evidenceKills++;
