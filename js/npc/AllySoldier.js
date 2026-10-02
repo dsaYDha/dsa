@@ -2,13 +2,17 @@
 // 보조 역할: 낮은 명중률로 제압 사격, 적 처치의 주인공은 플레이어. 적만 공격 (trueFaction 기준)
 // 분대(AllySquad)의 지시로 엄폐 지점을 따라 전진·실내 소탕·재집결
 // 사선 회피: 플레이어 조준선 앞을 오래 막지 않도록 앉거나 비킴 (교전 중엔 가끔 가로지름)
+// 3단계: 겉보기 적(빨간 표식)만 공격 — 위장 적에게 속는다. 오판 유도용 진짜 행동:
+//   동행(escort, 플레이어 3~5m 뒤에서 엄호 — 실제로 적과 싸움), 낙오병(join, 다가와 합류), 무전 콜아웃에 반응(돌아봄)
+//   행동 기록은 위장 적과 같은 기준(npc/Behaviors.js)
 import * as THREE from 'three';
 import { CONFIG } from '../config.js';
 import { Soldier } from './Soldier.js';
 import { gameRand as R } from '../core/Random.js';
 import { line } from '../dialogue/Callouts.js';
+import { moveToward, escortTarget, pickApproachNode, yawOfPlayerForward, trackApproach, trackSquad, trackFightFire } from './Behaviors.js';
 
-const S = { ENTER: 'enter', MOVE: 'move', COVER: 'cover', HOLD: 'hold', CLEAR: 'clear', DEAD: 'dead' };
+const S = { ENTER: 'enter', MOVE: 'move', COVER: 'cover', HOLD: 'hold', CLEAR: 'clear', ESCORT: 'escort', JOIN: 'join', DEAD: 'dead' };
 export const AllyState = S;
 
 const _v = new THREE.Vector3();
@@ -38,15 +42,27 @@ export class AllySoldier extends Soldier {
     this.lineCheckT = R.range(0, 0.2);
     this.lineCooldown = 0;
     this.orderKind = null;
+    this.escortUntil = 0;
+    this.escortSide = R.sign() * R.range(1.8, 2.8);
+    this.lookT = 0;
+    this.lookYaw = 0;
+    this.trackT = R.range(0, 0.5);
+    this.lastFireT = -99;
+    this.lastAckT = -99;
+  }
+
+  /** 분대 계획에서 빠져 혼자 움직이는 중 (동행·합류) */
+  get isEscorting() {
+    return this.state === S.ESCORT || this.state === S.JOIN;
   }
 
   get stateLabel() {
     return `${this.state}${this.state === S.COVER ? ':' + this.coverPhase : ''}`;
   }
 
-  // 적만 대상 (가까운 순 최대 3명)
+  // 겉보기 적(빨간 표식)만 대상 (가까운 순 최대 3명) — 위장 적에게는 속는다
   candidateTargets() {
-    const enemies = this.game.npcs.byFaction('enemy');
+    const enemies = this.game.npcs.byApparent('enemy');
     const near = [];
     const r2 = this.sightRange * this.sightRange;
     for (const e of enemies) {
@@ -135,10 +151,137 @@ export class AllySoldier extends Soldier {
   }
 
   // ------------------------------------------------------------------
+  // 3단계: 동행·낙오병 합류 (위장 적의 동행·접근과 같은 이동 로직)
+  // ------------------------------------------------------------------
+  startEscort(duration) {
+    this.escortUntil = this.game.time + duration;
+    this._releaseCover();
+    this.clearSeq = null;
+    this.orderKind = 'escort';
+    this.path = null;
+    this._setState(S.ESCORT);
+    if (!this.escortSpoke) {
+      this.escortSpoke = true;
+      this.game.voice.say({ speaker: '아군', text: line('allyEscort'), channel: 'shout', priority: 1, voice: this.voice });
+    }
+  }
+
+  startJoin() {
+    this.joinTarget = null;
+    this.retargetT = 0;
+    this._setState(S.JOIN);
+  }
+
+  _engagedNow() {
+    return !!(this.target && this.target !== 'player' && this.hasLOS && this.aware);
+  }
+
+  _escort(dt) {
+    const g = this.game;
+    if (g.time > this.escortUntil) {
+      this._endEscort();
+      return;
+    }
+    // 진짜 아군은 적이 보이면 멈춰 서서 실제로 싸운다
+    if (this._engagedNow()) {
+      this.curSpeed = 0;
+      this.aimTarget = 1;
+      this.crouchTarget = this.duckT > 0 ? 1 : 0;
+      return;
+    }
+    const t = escortTarget(g, this, 4.2, this.escortSide);
+    let arrived = true;
+    if (t && !this._waitForGap(dt)) arrived = moveToward(this, dt, t.x, t.z, { walk: this.tcfg.walk * 1.3, run: this.tcfg.run, runDist: 7, stopDist: 1.6, repath: 0.8 });
+    else if (!t) {
+      this.path = null;
+      this.curSpeed = 0;
+    }
+    if (arrived) {
+      this.targetYaw = yawOfPlayerForward(g);
+      this.aimTarget = 0.6;
+      this.crouchTarget = this.duckT > 0 ? 1 : 0.15;
+    }
+    if (this.position.distanceTo(g.player.feet) < 9) this.noteBehavior('escorting');
+  }
+
+  // 동행 중 조준선을 막으면: 동행을 멈추지 않고 반대편 옆으로 자리를 옮김
+  _escortDodge() {
+    this.escortSide = -Math.sign(this.escortSide || 1) * R.range(2.2, 3.2);
+    this.path = null;
+    this._mvT = 0;
+  }
+
+  _join(dt) {
+    const g = this.game;
+    if (this._engagedNow()) {
+      this.curSpeed = 0;
+      this.aimTarget = 1;
+      return;
+    }
+    const d = this.position.distanceTo(g.player.feet);
+    this.retargetT -= dt;
+    if (!this.joinTarget || this.retargetT <= 0) {
+      this.retargetT = 3;
+      this.joinTarget = pickApproachNode(g, this, [4, 7], false);
+    }
+    if (this.joinTarget) moveToward(this, dt, this.joinTarget.x, this.joinTarget.z, { walk: this.tcfg.walk * 1.2, run: this.tcfg.run * 0.9, runDist: 16, stopDist: 1.0, repath: 1.2, y: this.joinTarget.y });
+    if (!this.joinCried && d < 22) {
+      this.joinCried = true;
+      g.voice.say({ speaker: '아군', text: line('allyStraggler'), channel: 'shout', priority: 1, voice: this.voice });
+    }
+    if (d < 8.5) this.startEscort(R.range(...CONFIG.disguise.decoy.escortTime));
+  }
+
+  _endEscort() {
+    this.escortUntil = 0;
+    this.game.voice.say({ speaker: '아군', text: line('allyEscortEnd'), channel: 'shout', priority: 1, voice: this.voice });
+    this._setState(S.HOLD);
+    const sq = this.squad;
+    if (!sq) return;
+    if (!sq.done && !sq.straggler && !sq.withdrawing) {
+      sq.objT = Math.min(sq.objT, 0.3); // 분대로 복귀
+    } else if (sq.withdrawing && sq.objective && sq.objective.nodeId != null) {
+      this.orderWithdraw(sq.objective.nodeId); // 이미 이동 중인 분대를 따라감
+    } else {
+      sq.withdraw(); // 낙오병: 다른 구역으로 이동해 퇴장
+    }
+  }
+
+  // 아군 무전 콜아웃이 들림 → 그쪽을 돌아봄 (다른 분대원·동행·낙오병)
+  onRadioCallout(enemy, squad) {
+    if (!this.alive || this.squad === squad) return;
+    const g = this.game;
+    if (this.position.distanceTo(g.player.feet) > 40) return;
+    this.lookYaw = Math.atan2(enemy.position.x - this.position.x, enemy.position.z - this.position.z);
+    this.lookT = 1.6;
+    this.noteBehavior('radioAck');
+    if (g.time - this.lastAckT > 10 && R.chance(0.3)) {
+      this.lastAckT = g.time;
+      g.voice.say({ speaker: '아군', text: line('allyAck'), channel: 'shout', priority: 0, voice: this.voice });
+    }
+  }
+
+  // 적에게 쏜 사격 (행동 기록)
+  _fireShot() {
+    super._fireShot();
+    this.lastFireT = this.game.time;
+    if (this.target && this.target !== 'player') this.noteBehavior('firedAtEnemy');
+  }
+
+  // ------------------------------------------------------------------
   think(dt) {
     this._tickPerception(dt);
     this.duckT = Math.max(0, this.duckT - dt);
     this.lineCooldown = Math.max(0, this.lineCooldown - dt);
+    this.lookT = Math.max(0, this.lookT - dt);
+    // 행동 기록 (위장 적과 같은 기준)
+    this.trackT -= dt;
+    if (this.trackT <= 0) {
+      this.trackT = 0.5;
+      trackSquad(this, 0.5);
+      trackApproach(this, 0.5, { key: 'stare', needFacing: true, need: 2.5 });
+      trackFightFire(this, 0.5, this._engagedNow(), this.lastFireT);
+    }
 
     switch (this.state) {
       case S.ENTER:
@@ -158,9 +301,16 @@ export class AllySoldier extends Soldier {
         this.aimTarget = this.target && this.hasLOS ? 1 : 0.6;
         if (this.pauseT <= 0) this._nextClearNode();
         break;
+      case S.ESCORT:
+        this._escort(dt);
+        break;
+      case S.JOIN:
+        this._join(dt);
+        break;
       default:
         break;
     }
+    if (this.lookT > 0 && this.curSpeed < 0.5 && !this._engagedNow()) this.targetYaw = this.lookYaw;
     this._aimAtTarget(this.curSpeed < 0.1);
     this._sightLine(dt);
     this._shooting(dt);
@@ -211,7 +361,7 @@ export class AllySoldier extends Soldier {
     if (this.curSpeed > 0.4) return false; // 이동 중엔 쏘지 않음
     if (this.duckT > 0) return false;
     if (this.state === S.COVER && this.coverPhase !== 'peek') return false;
-    return this.state === S.COVER || this.state === S.HOLD || this.state === S.CLEAR;
+    return this.state === S.COVER || this.state === S.HOLD || this.state === S.CLEAR || this.state === S.ESCORT || this.state === S.JOIN;
   }
 
   // ------------------------------------------------------------------
@@ -286,6 +436,10 @@ export class AllySoldier extends Soldier {
     // 플레이어와 몸이 겹칠 만큼 가까이 서 있으면 먼저 비킴
     if (this.curSpeed < 0.3 && this.state !== S.MOVE && this.position.distanceTo(game.player.feet) < 1.6 && this.lineCooldown <= 0) {
       this.lineCooldown = 1.0;
+      if (this.isEscorting) {
+        this._escortDodge();
+        return;
+      }
       const node = this._sideStepNode(cam.position, _f);
       if (node != null) this.orderMove(node, this.orderKind === 'cover' || this.orderKind === 'clear' ? 'hold' : this.orderKind || 'hold');
       return;
@@ -313,6 +467,11 @@ export class AllySoldier extends Soldier {
     if (!playerFiring && firing && R.chance(L.crossChance)) return; // 교전 중엔 가끔 그대로 사선에 머묾 (긴장 요소)
     // 조준선이 앉은 머리보다 높게 지나가면 앉아서 피하고, 낮게 지나가면(플레이어가 앉아 쏘는 중 등) 옆으로 비킴
     const lineH = this._aimLineRel(_c.x, _c.y, _c.z, _rel).h;
+    if (this.isEscorting) {
+      this._escortDodge();
+      if (lineH > 1.4) this.duckT = 1.2;
+      return;
+    }
     if (lineH > 1.4 && this.crouch < 0.5 && this.duckT <= 0) {
       this.duckT = 2.5;
       if (this.squad && R.chance(0.25)) this.squad.callout(this, line('allySightLine'));
@@ -365,6 +524,11 @@ export class AllySoldier extends Soldier {
       // 맞은 아군의 외침은 무전 차단과 무관하게 항상 들림 (오인 사격 피드백)
       this.game.voice.say({ speaker: '아군', text: line('allyFriendlyFire'), channel: 'shout', priority: 3, force: true, voice: this.voice });
       this.game.camera.getWorldDirection(_f);
+      if (this.isEscorting) {
+        this._escortDodge();
+        this.duckT = 1.2;
+        return;
+      }
       const node = this.curSpeed < 0.5 ? this._sideStepNode(this.game.camera.position, _f) : null;
       if (node != null) {
         this.lineCooldown = CONFIG.ally.sightLine.cooldown;

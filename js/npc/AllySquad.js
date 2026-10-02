@@ -1,5 +1,7 @@
 // 아군 분대 (2~4명) — 목표 재평가: 알려진 적이 있으면 엄폐 지점을 따라 전진·교전,
 // 없으면 근처 건물 실내 소탕 또는 플레이어 근처로 재집결. 무전 콜아웃 담당 (적 위치는 실제 도움이 되게)
+// 3단계: 겉보기 적만 인식(위장 적에게 속음), 분대원 하나가 동행 엄호로 빠지기도 함(escortDecoyT),
+//        1인 '낙오병' 분대(straggler)는 계획 없이 플레이어에게 합류. 위치 콜아웃은 주변 아군 표식 인물에게도 들린다
 import * as THREE from 'three';
 import { CONFIG } from '../config.js';
 import { gameRand as R } from '../core/Random.js';
@@ -26,6 +28,24 @@ export class AllySquad {
     this.tourEnd = game.time + R.range(...CONFIG.ally.tour);
     this.lastFightT = game.time;
     this.withdrawing = false;
+    this.straggler = false; // 1인 낙오병 분대 (계획 없음)
+    this.escortDecoyT = null; // 이 시간이 지나면 분대원 하나가 플레이어 동행으로 빠짐
+  }
+
+  /** 분대 계획에 따르는 분대원 (동행·합류 중인 인원 제외) */
+  get free() {
+    return this.alive.filter((m) => !m.isEscorting);
+  }
+
+  // 분대원 하나를 플레이어 동행으로 (오판 유도용 진짜 동행)
+  detachEscort(duration) {
+    const cands = this.free;
+    if (cands.length < 1) return null;
+    const m = cands.length > 1 ? cands[cands.length - 1] : cands[0];
+    m.startEscort(duration);
+    const dc = this.game.director && this.game.director.decoyCount;
+    if (dc) dc.escort++;
+    return m;
   }
 
   get age() {
@@ -63,10 +83,18 @@ export class AllySquad {
       for (const o of this.pendingOrders) o.delay -= dt;
       const ready = this.pendingOrders.filter((o) => o.delay <= 0);
       this.pendingOrders = this.pendingOrders.filter((o) => o.delay > 0);
-      for (const o of ready) if (o.m.alive && this.objective && this.objective.kind === 'clear') o.m.orderClear(o.seq);
+      for (const o of ready) if (o.m.alive && !o.m.isEscorting && this.objective && this.objective.kind === 'clear') o.m.orderClear(o.seq);
     }
     const engaged = alive.some((m) => m.target && m.target !== 'player' && m.hasLOS);
     if (engaged) this.lastFightT = this.game.time;
+    if (this.straggler) return;
+    if (this.escortDecoyT != null) {
+      this.escortDecoyT -= dt;
+      if (this.escortDecoyT <= 0) {
+        this.escortDecoyT = null;
+        this.detachEscort(R.range(...CONFIG.disguise.decoy.escortTime));
+      }
+    }
     if (this.withdrawing) return;
     if (this.game.time > this.tourEnd && !this.fighting) {
       this.withdraw();
@@ -85,14 +113,15 @@ export class AllySquad {
   plan() {
     const game = this.game;
     const A = CONFIG.ally;
-    const alive = this.alive;
+    const alive = this.free;
     this.pendingOrders = null;
+    if (!alive.length) return;
     const c = this.centroid(_v).clone();
-    // 알려진 적: 분대원이 봤거나, 플레이어 화면에 보였거나, 플레이어 근처
+    // 알려진 적(빨간 표식): 분대원이 봤거나, 플레이어 화면에 보였거나, 플레이어 근처 — 위장 적은 모른다
     const pf = game.player.feet;
     let focus = null;
     let best = Infinity;
-    for (const e of game.npcs.byFaction('enemy')) {
+    for (const e of game.npcs.byApparent('enemy')) {
       const seenByUs = alive.some((m) => m.target === e && game.time - m.lastLOST < 6);
       const known = seenByUs || e.visibleToPlayer || e.position.distanceTo(pf) < 35;
       if (!known) continue;
@@ -117,6 +146,11 @@ export class AllySquad {
       }
     }
     this.objective = { kind: 'regroup' };
+    // 3단계: 플레이어 곁으로 오는 김에 한 명이 동행 엄호로 붙기도 함 (위장 적의 '동행'과 구분되지 않게)
+    const D = CONFIG.disguise;
+    if (game.director.threat >= D.fromThreat && alive.length >= 2 && !this.alive.some((m) => m.isEscorting) && R.chance(D.decoy.regroupEscortChance)) {
+      this.detachEscort(R.range(...D.decoy.escortTime));
+    }
     this._regroup();
   }
 
@@ -130,7 +164,7 @@ export class AllySquad {
     const stop = R.range(A.advanceStopDist[0], A.advanceStopDist[1]);
     const anchor = new THREE.Vector3(ep.x + away.x * stop, 0, ep.z + away.z * stop);
     const used = new Set();
-    for (const m of this.alive) {
+    for (const m of this.free) {
       if (m.state === 'clear' && m.clearSeq) continue;
       const node = this._coverNear(m, anchor, ep, used);
       if (node) {
@@ -202,7 +236,7 @@ export class AllySquad {
     const anchor = new THREE.Vector3(p.feet.x - fx * back + fz * side, p.feet.y, p.feet.z - fz * back - fx * side);
     const indoor = game.world.getIndoorInfo(p.position);
     const used = new Set();
-    for (const m of this.alive) {
+    for (const m of this.free) {
       const cands = nav.inRadius(anchor.x, anchor.y, anchor.z, 9, (n) => !used.has(n.id) && (indoor ? true : !n.indoor) && (n.reservedBy == null || !n.reservedBy.alive));
       let best = null;
       let bestScore = -Infinity;
@@ -259,9 +293,10 @@ export class AllySquad {
     const nav = this.game.world.nav;
     const valid = seq.filter((id) => id != null && !nav.get(id).removed);
     this.cleared.add(b.id);
-    this._clearing = new Set(this.alive.map((m) => m.id));
+    const free = this.free;
+    this._clearing = new Set(free.map((m) => m.id));
     // 분대원이 0.7초 간격으로 같은 순서를 따라 진입 (게임 시간 기준)
-    this.pendingOrders = this.alive.map((m, i) => ({ m, delay: i * 0.7, seq: valid }));
+    this.pendingOrders = free.map((m, i) => ({ m, delay: i * 0.7, seq: valid }));
     this.callout(this.alive[0], line('allyClearStart'));
     this.objT = 60; // 소탕 끝날 때까지 재평가 보류 (적 발견 시 빨라짐)
   }
@@ -295,7 +330,11 @@ export class AllySquad {
     if (game.time - last < 15) return;
     if (game.time - this.lastCalloutT < CONFIG.ally.calloutCooldown * (first ? 0.5 : 1)) return;
     const loc = describeLocation(game, enemy);
-    if (this.callout(member, line('allySpotted', { loc: loc.place, range: loc.range }), 2)) this.reported.set(enemy.id, game.time);
+    if (this.callout(member, line('allySpotted', { loc: loc.place, range: loc.range }), 2)) {
+      this.reported.set(enemy.id, game.time);
+      // 주변의 다른 아군 표식 인물(동행·낙오병·위장 적)도 무전을 듣는다 — 반응 여부가 행동 단서
+      game.npcs.broadcastRadio(this, enemy);
+    }
     // 발견하면 목표를 바로 재평가
     if (!this.objective || this.objective.kind !== 'advance') this.objT = Math.min(this.objT, 0.8);
   }
@@ -326,7 +365,7 @@ export class AllySquad {
     this.withdrawing = true;
     this.pendingOrders = null;
     this.objective = { kind: 'withdraw', nodeId: best.nodeId };
-    for (const m of this.alive) m.orderWithdraw(best.nodeId);
+    for (const m of this.free) m.orderWithdraw(best.nodeId); // 동행 중인 인원은 동행이 끝난 뒤 따라감
     this.callout(this.alive[0], line('allyWithdraw'), 2);
     return true;
   }

@@ -129,6 +129,9 @@ export class Menus {
       ['어시스트', `${r.assists}회`, false],
       ['오인 사격 감점', r.penaltyTotal.toLocaleString('ko-KR'), false, r.penaltyTotal < 0],
       ['경고', `${r.warnings}/${CONFIG.penalty.maxWarnings}`, false, r.warnings > 0],
+      ['위장 적 사전 식별 사살', `${r.disguisedKills ?? 0}명${r.evidenceKills ? ` (근거 ${r.evidenceKills})` : ''}`, false],
+      ['위장 적에게 기습당함', `${r.ambushedBy ?? 0}회`, false, (r.ambushedBy ?? 0) > 0],
+      ['관찰로 찾은 이상 단서', `${r.anomaliesFound ?? 0}개`, false],
     ];
     $('result-stats').innerHTML = rows
       .map(([k, v, best, isBad]) => `<div class="row${isBad ? ' bad' : ''}"><span>${k}</span><b>${v}${best ? ' <em>신기록</em>' : ''}</b></div>`)

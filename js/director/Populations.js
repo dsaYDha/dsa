@@ -1,7 +1,9 @@
-// 스폰 디렉터에 등록되는 2단계 인구 — 아군 분대, 민간인, 돌발 조우
+// 스폰 디렉터에 등록되는 인구 — 아군 분대, 민간인, 돌발 조우(2단계), 위장 적(3단계)
 // 모두 디렉터의 같은 출현 지점·등장 방식·예고음을 사용한다 ("뭔가 튀어나왔다 = 적"이 항상 성립하지 않게)
+import * as THREE from 'three';
 import { CONFIG, lerpRangeThreat } from '../config.js';
 import { gameRand as R } from '../core/Random.js';
+import { lerpD } from '../npc/Disguise.js';
 
 // ---------------------------------------------------------------------
 // 아군: 적 출현 크레딧이 쌓이면 증원 분대 (습격 구간엔 적립 2배), 시작 직후 분대 하나
@@ -39,9 +41,15 @@ export class AllyPopulation {
       if (old) old.withdraw();
     }
     if (room < 1 || d.credits.ally < A.squadSize[0]) return;
+    // 3단계: 오판 유도용 진짜 행동 — 1인 낙오병(다가와 합류) 또는 동행 엄호가 붙는 분대
+    const decoy = d.disguises.rollDecoy('ally');
+    if (decoy === 'straggler') {
+      if (d.spawnAppearance('ally', { size: 1, decoy: 'straggler' })) d.credits.ally -= 1;
+      return;
+    }
     let size = Math.min(R.int(A.squadSize[0], A.squadSize[1]), Math.floor(d.credits.ally), room);
     if (size < 2 && !(active === 0 && size >= 1)) return;
-    const req = d.spawnAppearance('ally', { size, announce: true });
+    const req = d.spawnAppearance('ally', { size, announce: true, decoy });
     if (req) {
       d.credits.ally -= size;
       this.squadsSent++;
@@ -84,7 +92,8 @@ export class CivilianPopulation {
       this.checkT = R.range(0.6, 1.4);
       const active = d.activeCount('civilian') + d.pendingCount('civilian');
       if (d.credits.civilian >= 1 && active < C.maxActive) {
-        if (d.spawnAppearance('civilian', {})) d.credits.civilian -= 1;
+        // 3단계: 오판 유도용 진짜 행동 — 충격으로 얼어붙음 / 도와달라며 다가옴
+        if (d.spawnAppearance('civilian', { decoy: d.disguises.rollDecoy('civilian') })) d.credits.civilian -= 1;
       }
     }
     // 소강 구간: 숨어 있던 민간인 대피 유도
@@ -147,5 +156,103 @@ export class AmbushEvent {
 
   debugInfo() {
     return `${Math.max(0, this.timer).toFixed(0)}s`;
+  }
+}
+
+// ---------------------------------------------------------------------
+// 3단계 위장 적: 가짜 아군 / 가짜 민간인 — 위협 2단계부터, 동시 2~3명, "가끔" 나오는 양념 수준
+// · 가짜 크레딧(디렉터 _accrueCredits)이 1 이상이면 같은 출현 지점·방식으로 등장
+//   가짜 아군: 아군 분대 근처 / 아군 쪽 경로 / 가끔 적이 있던 쪽, 가짜 민간인: 다른 민간인 근처 / 정찰형은 창가 위주
+// · 습격 구간이 시작되면 혼란을 틈타 접근하는 위장 적 (onAssault)
+// · 오판 유도용 진짜 행동 비율(rollDecoy)도 같은 단계부터 비슷한 빈도로
+// ---------------------------------------------------------------------
+export class DisguisePopulation {
+  constructor(director) {
+    this.d = director;
+    this.name = 'disguise';
+    this.reset();
+  }
+
+  reset() {
+    this.checkT = 2;
+    this.infiltrations = 0;
+  }
+
+  get enabled() {
+    return this.d.threat >= CONFIG.disguise.fromThreat;
+  }
+
+  canSpawn() {
+    const d = this.d;
+    return this.enabled && d.activeCount('disguised') + d.pendingCount('disguised') < d.capFor('disguised');
+  }
+
+  update(dt) {
+    const d = this.d;
+    d.credits.allyFake = Math.min(d.credits.allyFake, 1.5);
+    d.credits.civilianFake = Math.min(d.credits.civilianFake, 1.5);
+    this.checkT -= dt;
+    if (this.checkT > 0) return;
+    this.checkT = R.range(0.8, 1.6);
+    if (!this.canSpawn()) return;
+    if (d.credits.allyFake >= 1) {
+      if (this.spawnFake('ally')) d.credits.allyFake -= 1;
+    } else if (d.credits.civilianFake >= 1) {
+      if (this.spawnFake('civilian')) d.credits.civilianFake -= 1;
+    }
+  }
+
+  spawnFake(as, extra = {}) {
+    const d = this.d;
+    const g = d.game;
+    const D = CONFIG.disguise;
+    const role = extra.role || (R.chance(D.scoutChance[as]) ? 'scout' : 'ambusher');
+    const opts = { as, role, nearEnemy: false, ...extra };
+    if (as === 'ally') {
+      if (R.chance(0.3)) {
+        // 적이 있던 쪽에서 걸어옴
+        const eng = g.npcs.byApparent('enemy').filter((e) => e.aware);
+        if (eng.length) {
+          opts.nearPos = R.pick(eng).position;
+          opts.nearRadius = 22;
+          opts.fromEnemySide = true;
+        }
+      } else if (R.chance(D.nearSquadChance)) {
+        const sqs = g.npcs.squads.filter((q) => !q.done && !q.straggler);
+        if (sqs.length) {
+          opts.nearPos = R.pick(sqs).centroid(new THREE.Vector3());
+          opts.nearRadius = 22;
+        }
+      }
+    } else if (role !== 'scout' && R.chance(D.nearCiviliansChance)) {
+      const civs = g.npcs.byApparent('civilian');
+      if (civs.length) {
+        opts.nearPos = R.pick(civs).position;
+        opts.nearRadius = 16;
+      }
+    }
+    return d.spawnAppearance('disguised', opts);
+  }
+
+  // 오판 유도용 진짜 행동: 아군 'straggler'|'escort', 민간인 'frozen'|'helpSeeker' (없으면 null)
+  rollDecoy(kind) {
+    if (!this.enabled) return null;
+    const D = CONFIG.disguise.decoy;
+    if (!R.chance(lerpD(kind === 'ally' ? D.allyChance : D.civilianChance, this.d.threat))) return null;
+    if (kind === 'ally') return R.chance(0.5) ? 'straggler' : 'escort';
+    return R.chance(0.5) ? 'frozen' : 'helpSeeker';
+  }
+
+  // 습격 구간 시작: 혼란을 틈타 가까이 접근하는 위장 적
+  onAssault() {
+    const d = this.d;
+    if (!this.canSpawn() || !R.chance(lerpD(CONFIG.disguise.assaultInfiltrate, d.threat))) return;
+    const as = R.chance(0.55) ? 'ally' : 'civilian';
+    if (this.spawnFake(as, { role: 'ambusher', infiltrate: true, distRange: [14, 28] })) this.infiltrations++;
+  }
+
+  debugInfo() {
+    const d = this.d;
+    return `위장 ${d.activeCount('disguised')}/${d.capFor('disguised')} · 가짜 크레딧 아군 ${d.credits.allyFake.toFixed(2)} 민간인 ${d.credits.civilianFake.toFixed(2)}`;
   }
 }

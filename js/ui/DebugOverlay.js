@@ -1,9 +1,30 @@
 // 디버그 오버레이 (백틱 ` 키, 기본 꺼짐) — FPS, 종류별 활성 NPC 수, 스폰 디렉터 상태·출현 비율, 페널티, NPC 머리 위 trueFaction 표시
+// 3단계: 위장 적 수·상한·누계, 오판 유도 행동 누계, 머리 위 위장 정보(유형·숙련도·남은 단서·기습 조건 진행)
 import * as THREE from 'three';
 import { CONFIG } from '../config.js';
 import { PhaseLabel } from '../director/SpawnDirector.js';
 
 const _v = new THREE.Vector3();
+
+const GEAR_KO = { curvedRifle: '굽은탄창', enemyHelmet: '적헬멧', patchMissing: '패치없음', patchWrong: '패치다름', tapeBand: '테이프완장',
+  combatBoots: '군화', waistBulge: '허리불룩', backRifle: '등총몸', radio: '무전기', vestStraps: '조끼끈', tacticalGloves: '전술장갑' };
+const TRAIT_KO = { loner: '단독', noFire: '안쏨', fireAir: '허공사격', ignoreRadio: '무전무시', stare: '응시', fromEnemySide: '적쪽',
+  hideHands: '손숨김', noCower: '안웅크림', lateHands: '손늦게', noHands: '손안듦' };
+
+// 위장 적 머리 위 정보: 유형·숙련도 / 남은(아직 관찰 안 된) 장비 단서 / 행동 성향 / 기습 조건 진행
+function disguiseLabel(n) {
+  const p = n.disguise;
+  if (p.revealed) return ` | 정체 드러냄(${p.revealReason})`;
+  const gear = p.gear.map((k) => GEAR_KO[k] || k).join(',') || '없음(완벽)';
+  const traits = [...p.traits].map((k) => TRAIT_KO[k] || k).join(',') || '-';
+  const ctl = n.ctl;
+  const amb = ctl ? ` 기습 ${(Math.min(1, ctl.ambushProgress) * 100).toFixed(0)}%${ctl.oppNow ? '(' + ctl.oppNow + ')' : ''} ${ctl.dist.toFixed(0)}m` : '';
+  // 남은 단서: 아직 관찰로 찾지 못한 이상 사실 (장비 + 지금까지 기록된 행동)
+  const found = n.observed ? n.observed.found : null;
+  const left = n.observationFacts().filter((f) => f.anomalous && !(found && found.has(f.key))).length;
+  const seen = ` 찾은 이상 ${n.observed ? n.observed.anomalies : 0}·남은 ${left}`;
+  return ` | 위장[${p.role === 'scout' ? '정찰' : '기습'}·${p.mode}·숙련${p.skill}] 장비:${gear} 행동:${traits}${seen}${amb}`;
+}
 
 function ratio(a) {
   const t = a.enemy + a.ally + a.civilian || 1;
@@ -68,6 +89,8 @@ export class DebugOverlay {
       `<b>NPC</b> 적 ${d.counts.enemy}/${d.caps.enemy} · 아군 ${d.counts.ally}/${d.caps.ally} · 민간인 ${d.counts.civilian}/${d.caps.civilian} · 전체 ${npcs.length} · 대기 ${d.pending}`,
       `<b>출현 누계</b> 적 ${d.appearances.enemy} · 아군 ${d.appearances.ally} · 민간인 ${d.appearances.civilian} (${ratio(d.appearances)}) · 크레딧 아군 ${d.credits.ally.toFixed(1)} 민간인 ${d.credits.civilian.toFixed(1)}`,
       `<b>돌발 조우</b> 다음 ${Math.max(0, d.nextAmbush).toFixed(0)}s · 누계 적 ${d.ambushCount.enemy} / 아군 ${d.ambushCount.ally} / 민간인 ${d.ambushCount.civilian}${d.civPanic > 0 ? ` · 민간인 공황 ${d.civPanic.toFixed(0)}s` : ''}`,
+      `<b>위장 적</b> 활성 ${d.disguised.active}/${d.disguised.cap} · 누계 아군형 ${d.disguised.spawned.ally} / 민간인형 ${d.disguised.spawned.civilian} · 습격 틈 접근 ${d.disguised.infiltrations} · 습격 요청 ${d.calledAssaults} · 크레딧 ${d.credits.allyFake.toFixed(2)}/${d.credits.civilianFake.toFixed(2)}`,
+      `<b>진짜 행동</b> 낙오병 ${d.decoys.straggler} · 동행 ${d.decoys.escort} · 얼어붙음 ${d.decoys.frozen} · 도움 요청 ${d.decoys.helpSeeker} · <b>관찰</b> 사실 ${g.observation.factsFound} / 이상 ${g.observation.anomaliesFound} · 기습당함 ${g.score.ambushedBy}`,
       `<b>페널티</b> 경고 ${g.penalty.warnings} · 아군 피격/사살 ${g.penalty.allyHits}/${g.penalty.allyKills} · 민간인 ${g.penalty.civHits}/${g.penalty.civKills} · 콤보잠금 ${g.score.comboLockT.toFixed(1)}s · 무전두절 ${g.voice.muteRemaining('radio').toFixed(0)}s`,
       `<b>디렉터</b> ${PhaseLabel[d.phase]} (${d.label}) · 긴장도 ${d.intensity.toFixed(2)}`,
       `<b>위협</b> ${d.threat} · 다음 단계까지 ${d.nextLevelIn.toFixed(0)}s`,
@@ -103,7 +126,8 @@ export class DebugOverlay {
       el.style.left = `${((_v.x + 1) / 2) * w}px`;
       el.style.top = `${((1 - _v.y) / 2) * h}px`;
       const app = n.apparentFaction !== n.trueFaction ? `(겉:${n.apparentFaction})` : '';
-      const text = `${n.trueFaction}${app}${n.alive ? '' : ' ✝'} · ${n.type || n.kind} · ${n.stateLabel || ''}${n.visibleToPlayer ? ' 👁' : ''}`;
+      let text = `${n.trueFaction}${app}${n.alive ? '' : ' ✝'} · ${n.type || n.kind} · ${n.stateLabel || ''}${n.visibleToPlayer ? ' 👁' : ''}`;
+      if (n.disguise) text += disguiseLabel(n);
       if (el.textContent !== text) el.textContent = text;
       el.dataset.faction = n.trueFaction;
     }

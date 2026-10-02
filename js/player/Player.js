@@ -115,7 +115,8 @@ export class Player {
 
     // --- 시점 ---
     const ads = weapon ? weapon.adsT : 0;
-    const sens = P.baseSensitivity * game.settings.sensitivity * (1 - ads * (1 - P.adsSensitivityMul));
+    const obs = game.observation ? game.observation.t : 0; // 관찰 모드(확대) 중엔 감도·이동 속도 감소
+    const sens = P.baseSensitivity * game.settings.sensitivity * (1 - ads * (1 - P.adsSensitivityMul)) * (1 - obs * (1 - CONFIG.observe.sensitivityMul));
     const m = input.consumeMouse();
     this.yaw -= m.x * sens;
     this.pitch -= m.y * sens;
@@ -143,13 +144,14 @@ export class Player {
 
     if (input.wasAction('crouch')) this.crouching = !this.crouching;
     if (input.isAction('sprint') && this.crouching && moving) this.crouching = false; // 달리면 일어섬
-    const wantSprint = input.isAction('sprint') && input.isAction('forward') && !this.crouching && ads < 0.2 && !(weapon && weapon.timeSinceShot < 0.25);
+    const wantSprint = input.isAction('sprint') && input.isAction('forward') && !this.crouching && ads < 0.2 && obs < 0.2 && !(weapon && weapon.timeSinceShot < 0.25);
     this.sprinting = wantSprint && this.onFloor;
 
     let speed = P.walkSpeed;
     if (this.sprinting) speed = P.sprintSpeed;
     if (this.crouching) speed = P.crouchSpeed;
     speed *= 1 - ads * (1 - P.adsSpeedMul);
+    speed *= 1 - obs * (1 - CONFIG.observe.moveMul);
 
     if (input.wasAction('jump') && this.onFloor) {
       if (this.crouching) this.crouching = false;

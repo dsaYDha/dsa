@@ -1,7 +1,10 @@
 // 전투 이펙트 — 피탄(먼지·불꽃 + 탄흔, 오브젝트 풀링), 예광탄, 피, 적 총구 화염, 플레이어 총구 섬광
+// 3단계: 위장 적 연출 — 숨긴 총이 떨어짐(dropRifle, 작은 풀), 뜯긴 완장 조각(shreds)
 import * as THREE from 'three';
 import { ParticleSystem } from './Particles.js';
 import { gameRand as R } from '../core/Random.js';
+import { rifleGeometry } from '../npc/HumanoidRig.js';
+import { patchInterior } from '../world/Materials.js';
 
 const _q = new THREE.Quaternion();
 const _m = new THREE.Matrix4();
@@ -62,6 +65,46 @@ export class Effects {
     this.muzzleLight = new THREE.PointLight(0xffb060, 0, 9, 2);
     scene.add(this.muzzleLight);
     this._muzzleT = 0;
+
+    // 떨어지는 숨긴 총 (위장 민간인 사살 연출) — 작은 풀
+    const rg = rifleGeometry('curved');
+    this.dropMat = patchInterior(new THREE.MeshLambertMaterial({ vertexColors: true }), false);
+    const rm = this.dropMat;
+    this.drops = [];
+    for (let i = 0; i < 4; i++) {
+      const mesh = new THREE.Mesh(rg, rm);
+      mesh.visible = false;
+      scene.add(mesh);
+      this.drops.push({ mesh, t: 0, life: 0, vel: new THREE.Vector3(), spin: new THREE.Vector3(), floor: 0 });
+    }
+    this.dropCursor = 0;
+  }
+
+  // 숨긴 총이 옷 속에서 떨어짐 (튀어나와 바닥에 구름). indoor: 실내 음영 0~1
+  dropRifle(pos, yaw, indoor = 0) {
+    const d = this.drops[this.dropCursor];
+    this.dropCursor = (this.dropCursor + 1) % this.drops.length;
+    this.dropMat.userData.uInterior.value = indoor;
+    d.mesh.visible = true;
+    d.mesh.position.set(pos.x - Math.sin(yaw) * 0.15, pos.y + 1.05, pos.z - Math.cos(yaw) * 0.15);
+    d.mesh.rotation.set(-1.2, yaw, R.range(-0.5, 0.5));
+    d.vel.set(-Math.sin(yaw) * R.range(0.6, 1.2) + R.range(-0.4, 0.4), R.range(0.8, 1.6), -Math.cos(yaw) * R.range(0.6, 1.2) + R.range(-0.4, 0.4));
+    d.spin.set(R.range(-6, 6), R.range(-3, 3), R.range(-6, 6));
+    d.floor = pos.y + 0.04;
+    d.t = 0;
+    d.life = 9;
+  }
+
+  // 뜯겨 날리는 완장 조각
+  shreds(pos, color) {
+    const c = new THREE.Color(color);
+    for (let i = 0; i < 9; i++) {
+      this.dust.emit({
+        x: pos.x + R.range(-0.15, 0.15), y: pos.y + R.range(-0.1, 0.15), z: pos.z + R.range(-0.15, 0.15),
+        vx: R.range(-1.2, 1.2), vy: R.range(0.5, 2.0), vz: R.range(-1.2, 1.2),
+        life: R.range(0.8, 1.4), size: R.range(0.05, 0.08), sizeEnd: 0.05, color: [c.r, c.g, c.b], alpha: 1, fadeIn: 0.01, gravity: 4, drag: 2.5,
+      });
+    }
   }
 
   impact(point, normal, surface = 'concrete', withDecal = true) {
@@ -176,12 +219,37 @@ export class Effects {
       this._muzzleT -= dt;
       this.muzzleLight.intensity = this._muzzleT > 0 ? 45 * R.range(0.7, 1.1) : 0;
     }
+    for (const d of this.drops) {
+      if (!d.mesh.visible) continue;
+      d.t += dt;
+      const m = d.mesh;
+      if (m.position.y > d.floor + 0.001 || d.vel.y > 0) {
+        d.vel.y -= 9.8 * dt;
+        m.position.addScaledVector(d.vel, dt);
+        m.rotation.x += d.spin.x * dt;
+        m.rotation.y += d.spin.y * dt;
+        m.rotation.z += d.spin.z * dt;
+        if (m.position.y <= d.floor) {
+          m.position.y = d.floor;
+          d.vel.set(d.vel.x * 0.3, Math.abs(d.vel.y) * 0.25, d.vel.z * 0.3);
+          d.spin.multiplyScalar(0.3);
+          if (d.vel.y < 0.4) {
+            // 옆으로 누워 멈춤
+            d.vel.set(0, 0, 0);
+            m.rotation.x = 0;
+            m.rotation.z = Math.PI / 2;
+          }
+        }
+      }
+      if (d.t > d.life) m.visible = false;
+    }
   }
 
   dispose() {
     const s = this.scene;
     s.remove(this.dust.mesh, this.sparks.mesh, this.flashes.mesh, this.decals, this.muzzleLight);
     for (const t of this.tracers) s.remove(t.mesh);
+    for (const d of this.drops) s.remove(d.mesh);
     this.decals.dispose();
   }
 
@@ -193,6 +261,7 @@ export class Effects {
       t.active = false;
       t.mesh.visible = false;
     }
+    for (const d of this.drops) d.mesh.visible = false;
     _m.makeScale(0, 0, 0);
     for (let i = 0; i < this.decalCap; i++) this.decals.setMatrixAt(i, _m);
     this.decals.instanceMatrix.needsUpdate = true;

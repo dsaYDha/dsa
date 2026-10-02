@@ -2,6 +2,9 @@
 // 상태: 은신(방 구석·가구 옆·차량 뒤, 창밖 엿보기) → 가까운 총성에 웅크림·비명 → 조용해지면 대피로로 이동 → 대피 성공 시 사라짐
 // 플레이어가 가까이서 조준하면 움찔하며 손을 들고 "쏘지 마세요!"
 // 피해는 플레이어 사격으로만 발생 (NPC 총알은 민간인을 맞히지 않음)
+// 3단계 오판 유도용 진짜 행동(decoy): 'frozen' 충격으로 얼어붙어 웅크리지 못함 / 'helpSeeker' "도와주세요!" 하며 플레이어에게 다가옴
+//   행동 기록(웅크림·손 들기·다가옴·대피)은 위장 적과 같은 기준(npc/Behaviors.js)
+// 대피 지점에 닿아도 플레이어 눈앞에서는 사라지지 않고, 시야 밖이 되면 퇴장
 import * as THREE from 'three';
 import { CONFIG } from '../config.js';
 import { Events } from '../core/EventBus.js';
@@ -9,8 +12,9 @@ import { NPCBase } from './NPCBase.js';
 import { civilianOutfit } from './Outfits.js';
 import { gameRand as R } from '../core/Random.js';
 import { line } from '../dialogue/Callouts.js';
+import { moveToward, pickApproachNode, trackApproach } from './Behaviors.js';
 
-const S = { ENTER: 'enter', MOVE: 'move', HIDE: 'hide', PEEK: 'peek', COWER: 'cower', FLEE: 'flee', DEAD: 'dead' };
+const S = { ENTER: 'enter', MOVE: 'move', HIDE: 'hide', PEEK: 'peek', COWER: 'cower', FLEE: 'flee', FROZEN: 'frozen', SEEK: 'seek', LEAVE: 'leave', DEAD: 'dead' };
 export const CivilianState = S;
 
 const _v = new THREE.Vector3();
@@ -18,7 +22,7 @@ let lastScreamLineT = -99; // 비명 자막 전역 간격 (여러 민간인이 �
 
 export class CivilianNPC extends NPCBase {
   /**
-   * opts: { nodeId, entrance: 'room'|'window'|'cross'|'flee'|'coverPop'|'ambush', goalNode, buildingId }
+   * opts: { nodeId, entrance: 'room'|'window'|'cross'|'flee'|'coverPop'|'ambush', goalNode, buildingId, decoy: null|'frozen'|'helpSeeker' }
    */
   constructor(game, opts) {
     super(game, { ...opts, trueFaction: 'civilian', apparentFaction: 'civilian', kind: 'civilian', maxHealth: CONFIG.civilian.health, outfit: opts.outfit || civilianOutfit() });
@@ -44,10 +48,21 @@ export class CivilianNPC extends NPCBase {
     this.hideSpot = null; // 노드에서 조금 떨어진 실제 숨는 위치
     this.fleeBoost = 1;
     this.evacuated = false;
+    // 오판 유도용 진짜 행동
+    this.decoy = opts.decoy || null;
+    const DC = CONFIG.disguise.decoy;
+    this.frozenLeft = this.decoy === 'frozen' ? R.range(...DC.frozenTime) : 0; // 총성에 얼어붙어 있을 시간(누적)
+    this.shockT = 0;
+    this.seekLeft = this.decoy === 'helpSeeker' ? R.range(14, 24) : 0; // 플레이어 곁에 머무를 시간
+    this.seekTarget = null;
+    this.retargetT = 0;
+    this.trackT = R.range(0, 0.5);
+    this.leaveT = 0;
+    this._handsWas = false;
   }
 
   get stateLabel() {
-    return `${this.state}${this.handsUp > 0.5 ? ':손듦' : ''}${this.panic ? ':공황' : ''}`;
+    return `${this.state}${this.decoy ? '·' + this.decoy : ''}${this.handsUp > 0.5 ? ':손듦' : ''}${this.panic ? ':공황' : ''}`;
   }
 
   _setState(s) {
@@ -73,6 +88,20 @@ export class CivilianNPC extends NPCBase {
   hearDanger(pos, dist) {
     if (!this.alive) return;
     this.lastDangerT = this.game.time;
+    // 충격으로 얼어붙음: 웅크리지 못하고 그 자리에 굳음 (위장 적의 '웅크리지 않음'과 같은 단서가 남는다)
+    if (this.frozenLeft > 0 && this.state !== S.LEAVE && !this.panic) {
+      this.noteBehavior('noCower');
+      this.shockT = R.range(3, 5);
+      if (this.state !== S.FROZEN) {
+        this.path = null;
+        this._setState(S.FROZEN);
+      }
+      return;
+    }
+    if (this.state === S.SEEK) {
+      this._cowerNow();
+      return;
+    }
     if (this.state === S.FLEE && !this.panic) {
       // 대피 중 아주 가까운 총성: 잠깐 웅크리기도
       if (dist < 8 && R.chance(0.3)) this._cowerNow();
@@ -88,6 +117,7 @@ export class CivilianNPC extends NPCBase {
     this.cowerT = R.range(...CONFIG.civilian.cowerTime);
     this.cowerCount = (this.cowerCount || 0) + 1;
     this._setState(S.COWER);
+    this.noteBehavior('cowered');
     // 비명: 처음엔 거의 항상, 반복될수록 드물게 (같은 사람 6초, 자막은 전체 8초·같은 사람 15초 간격)
     const t = this.game.time;
     if (t - (this.lastScreamT ?? -99) > 6 && R.chance(0.9 / this.cowerCount)) {
@@ -137,7 +167,16 @@ export class CivilianNPC extends NPCBase {
     this.notAimedT += dt;
     if (this.notAimedT > 0.3) this.aimedT = Math.max(0, this.aimedT - dt * 2);
     const wantHands = this.aimedT > C.aimReactTime || (this.handsUp > 0.5 && this.notAimedT < C.handsUpRelease);
+    if (wantHands && !this._handsWas) this.noteBehavior('handsUpQuick'); // 진짜 민간인은 겨누면 곧바로 손을 든다
+    this._handsWas = wantHands;
     this.handsUp += ((wantHands ? 1 : 0) - this.handsUp) * Math.min(1, dt * 8);
+    this.shock += ((this.state === S.FROZEN ? 1 : 0) - this.shock) * Math.min(1, dt * 5);
+    // 행동 기록 (위장 적과 같은 기준)
+    this.trackT -= dt;
+    if (this.trackT <= 0) {
+      this.trackT = 0.5;
+      trackApproach(this, 0.5, { key: 'towardPlayer', needFacing: false, need: 2.0, range: 30 });
+    }
     const frozen = this.handsUp > 0.5;
     if (frozen) {
       this.curSpeed = 0;
@@ -154,6 +193,9 @@ export class CivilianNPC extends NPCBase {
       case S.PEEK: this._peek(dt); break;
       case S.COWER: this._cower(dt); break;
       case S.FLEE: this._flee(dt); break;
+      case S.FROZEN: this._frozen(dt); break;
+      case S.SEEK: this._seek(dt); break;
+      case S.LEAVE: this._leave(dt); break;
       default: break;
     }
     const cowerTarget = this.state === S.COWER ? 1 : 0;
@@ -162,6 +204,10 @@ export class CivilianNPC extends NPCBase {
 
   _enter() {
     const game = this.game;
+    if (this.decoy === 'helpSeeker') {
+      this._setState(S.SEEK);
+      return;
+    }
     switch (this.entrance) {
       case 'window':
         if (this.goalNode != null && this._goTo(this.goalNode, 'window', false)) return;
@@ -204,8 +250,10 @@ export class CivilianNPC extends NPCBase {
     const done = this._followPath(dt, speed * carryWalk);
     if (!done) return;
     this.curSpeed = 0;
-    if (this.moveKind === 'flee') this._evacuate();
-    else if (this.moveKind === 'window') {
+    if (this.moveKind === 'flee') {
+      this.leaveT = 0;
+      this._setState(S.LEAVE);
+    } else if (this.moveKind === 'window') {
       const n = this.game.world.nav.get(this.goalNode);
       if (n && n.out) this.targetYaw = Math.atan2(n.out.x, n.out.z);
       this.peekT = R.range(2.5, 5.5);
@@ -291,16 +339,64 @@ export class CivilianNPC extends NPCBase {
     this.cowerT -= dt;
     if (this.cowerT <= 0) {
       if (this.panic) this._startFlee(true);
+      else if (this.seekLeft > 0) this._setState(S.SEEK);
       else this._beginHide();
     }
+  }
+
+  // 얼어붙음: 선 채로 두 손을 가슴에 모으고 굳어 있음 (총성이 멎으면 풀림)
+  _frozen(dt) {
+    this.curSpeed = 0;
+    this.crouchTarget = 0;
+    this.frozenLeft -= dt;
+    this.shockT -= dt;
+    if (this.shockT <= 0 || this.frozenLeft <= -3) {
+      if (this.seekLeft > 0) this._setState(S.SEEK);
+      else this._beginHide();
+    }
+  }
+
+  // 도움 요청: "도와주세요!" 하며 플레이어에게 다가와 곁에 머묾 → 시간이 지나면 대피
+  _seek(dt) {
+    const g = this.game;
+    const d = this.position.distanceTo(g.player.feet);
+    this.retargetT -= dt;
+    // 플레이어 곁(3~5.5m, 등 뒤·옆 선호)에 머묾 — 너무 붙으면 다시 자리를 잡음 (사선에 끼지 않게)
+    if (!this.seekTarget || this.retargetT <= 0 || (d < 2.2 && this.retargetT < 2.4)) {
+      this.retargetT = 3;
+      this.seekTarget = pickApproachNode(g, this, [3.2, 5.5], true);
+    }
+    let arrived = true;
+    if (this.seekTarget) arrived = moveToward(this, dt, this.seekTarget.x, this.seekTarget.z, { walk: this.walkSpeed * 1.3, run: this.runSpeed, runDist: 10, stopDist: 0.3, y: this.seekTarget.y });
+    if (!this.helpCried && d < 20) {
+      this.helpCried = true;
+      this._say('civHelp', 2);
+      this.noteBehavior('helpCry');
+    }
+    if (arrived && d < 7) {
+      this.curSpeed = 0;
+      this.crouchTarget = 0.35;
+      this.faceTowards(g.player.feet.x, g.player.feet.z);
+      this.seekLeft -= dt;
+    } else this.seekLeft -= dt * 0.25;
+    if (this.seekLeft <= 0) this._startFlee(false);
+  }
+
+  // 대피 지점 도착: 플레이어 눈앞에선 몸을 낮추고 기다렸다가 시야 밖이 되면 퇴장 (최대 15초)
+  _leave(dt) {
+    this.curSpeed = 0;
+    this.crouchTarget = 0.7;
+    this.leaveT += dt;
+    if (!this.visibleToPlayer || this.leaveT > 15) this._evacuate();
   }
 
   _flee(dt) {
     this._move(dt);
   }
 
+  // 겉보기 적(빨간 표식)이 가까이 있는지 — 위장 적은 모른다
   _enemyNear(r) {
-    for (const e of this.game.npcs.byFaction('enemy')) if (e.position.distanceToSquared(this.position) < r * r) return true;
+    for (const e of this.game.npcs.byApparent('enemy')) if (e.position.distanceToSquared(this.position) < r * r) return true;
     return false;
   }
 
@@ -315,6 +411,8 @@ export class CivilianNPC extends NPCBase {
       return;
     }
     this.state = S.MOVE;
+    this.seekLeft = 0;
+    this.noteBehavior('fled');
     if (!panic && R.chance(0.3)) this._say('civFlee');
   }
 

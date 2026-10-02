@@ -365,3 +365,57 @@ button.primary:hover { filter: brightness(1.12); }
 #set-speech-note { color: var(--muted); font-size: 12px; }
 .reason { color: var(--muted); margin: -6px 0 12px; }
 .stats .row.bad b { color: #ff8a6a; }
+
+/* ---------------- 3단계: 관찰 모드·위장 적 ---------------- */
+#observe-vignette {
+  position: absolute; inset: 0; opacity: 0; pointer-events: none;
+  background: radial-gradient(ellipse at center, rgba(0, 0, 0, 0) 38%, rgba(4, 6, 8, 0.55) 72%, rgba(0, 0, 0, 0.88) 100%);
+}
+/* 관찰 게이지: 화면 중앙 고리 (다음 사실까지 진행도) */
+#observe-gauge {
+  --p: 0deg;
+  position: absolute; left: 50%; top: 50%; width: 46px; height: 46px; margin: -23px 0 0 -23px; border-radius: 50%;
+  opacity: 0; transition: opacity 0.15s;
+  background: conic-gradient(rgba(255, 214, 110, 0.95) var(--p), rgba(255, 255, 255, 0.14) var(--p));
+  -webkit-mask: radial-gradient(circle, transparent 18px, #000 19px, #000 22px, transparent 23px);
+  mask: radial-gradient(circle, transparent 18px, #000 19px, #000 22px, transparent 23px);
+}
+#observe-gauge.on { opacity: 1; }
+#observe-memo {
+  position: absolute; right: 22px; top: 34%; width: min(300px, calc(100vw - 32px));
+  background: rgba(12, 12, 10, 0.72); border: 1px solid rgba(255, 214, 110, 0.35); border-left: 3px solid rgba(255, 214, 110, 0.75);
+  padding: 8px 12px 9px; font-size: 14px; transition: opacity 0.4s;
+}
+#observe-memo.dim { opacity: 0.55; }
+#observe-memo.outlined { border-left-color: #ffd02a; }
+#observe-memo .hd { font-size: 12px; color: #ffd66e; letter-spacing: 0.08em; margin-bottom: 4px; }
+#observe-target { color: var(--fg); letter-spacing: 0; margin-left: 4px; }
+#observe-facts { list-style: none; margin: 0; padding: 0; }
+#observe-facts li { padding: 2px 0; line-height: 1.4; }
+#observe-facts li::before { content: '· '; color: var(--muted); }
+#observe-facts li.odd { color: #ffd66e; }
+#observe-facts li.odd::before { content: ''; }
+#observe-facts li.odd b { display: inline-block; width: 14px; height: 14px; line-height: 14px; text-align: center; font-size: 11px;
+  background: #ffd02a; color: #111; border-radius: 50%; margin-right: 4px; text-shadow: none; }
+#observe-facts li.none { color: var(--muted); }
+#observe-status { margin-top: 5px; font-size: 12px; color: var(--muted); min-height: 1em; }
+#observe-hint {
+  position: absolute; left: 50%; top: 61%; transform: translateX(-50%); font-size: 15px; color: #ffd66e;
+  background: rgba(0, 0, 0, 0.45); padding: 4px 12px; opacity: 0; transition: opacity 0.4s; white-space: nowrap;
+}
+#observe-hint.show { opacity: 1; }
+#disguise-kill { position: absolute; left: 50%; top: 31%; transform: translateX(-50%); text-align: center; opacity: 0; white-space: nowrap; }
+#disguise-kill .t { font-size: 30px; font-weight: 900; color: #9ff07a; letter-spacing: 0.08em; text-shadow: 0 2px 0 #000, 0 0 16px rgba(120, 255, 90, 0.45); }
+#disguise-kill.show { animation: ffwarn 1.8s ease-out forwards; }
+.dmgdir.warn { border-top-color: rgba(255, 200, 40, 0.95); filter: drop-shadow(0 0 6px rgba(255, 190, 0, 0.7)); }
+
+.briefing {
+  margin: 0 0 16px; padding: 10px 12px; background: rgba(255, 214, 110, 0.06); border: 1px solid rgba(255, 214, 110, 0.25);
+  font-size: 13px; line-height: 1.6;
+}
+.briefing .hd { color: var(--accent); font-weight: 700; letter-spacing: 0.1em; margin-bottom: 4px; }
+.briefing ul { margin: 0; padding-left: 18px; }
+.briefing kbd { margin-right: 2px; }
+@media (max-width: 640px) {
+  #observe-memo { top: auto; bottom: 26%; right: 16px; }
+}
