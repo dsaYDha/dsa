@@ -18,7 +18,7 @@
 | 1 | 핵심 사격 루프 (맵·플레이어·무기·적군·스폰 디렉터·점수·흐름) | **완료** |
 | 2 | 민간인·아군 NPC, 오인 사격 페널티 | **완료** |
 | 3 | 위장 적, 시각 단서 관찰 시스템 | **완료** |
-| 4 | 말 걸기·구두 문답 (암구호, 실내 확인 문답, "손 들어") | 예정 (구조 준비됨) |
+| 4 | 말 걸기·구두 문답 (암구호, 실내 확인 문답, "손 들어") | **완료** |
 | 5 | 난이도 곡선, 결과 화면, 연출·사운드 마무리, 최적화 | 예정 |
 
 ### 1단계에서 구현한 것
@@ -87,7 +87,30 @@
 - **브리핑·안내**: 시작 화면 "작전 브리핑"(위장 사실·진짜 아군 장비 기준·진짜 민간인 특징·관찰 방법), 위장 적 첫 등장 시 배너 1회, 관찰 모드 첫 사용 시 안내 1회
 - **HUD·결과·디버그**: 관찰 게이지(진행도·거리·상태), 관찰 메모 패널, 킬 피드 "위장 적". 결과에 위장 적 사전 식별 사살(근거 n), 위장 적에게 기습당한 횟수, 관찰로 찾은 이상 단서 수.
   디버그: 위장 적 활성/상한·누계·침투·습격 요청, 진짜 행동 누계, 관찰 통계, 머리 위 라벨(유형·모드·숙련도·장비 단서·행동 성향·찾은/남은 이상 단서·기습 진행률과 지금 기회)
-- 다음 단계 준비: `E`·`1~4` 미사용 유지(`CONFIG.reservedKeys`), 위장 프로필 `npc.disguise.skill`, 실제 행동 기록·관찰 기록 조회
+- 다음 단계 준비: `E`·`1~4` 미사용 유지(당시 `CONFIG.reservedKeys` — 4단계에서 `CONFIG.keys` 로 옮김), 위장 프로필 `npc.disguise.skill`, 실제 행동 기록·관찰 기록 조회
+
+### 4단계에서 구현한 것
+
+- **3단계 남은 문제 수정**: 관찰 모드가 보는 각도를 따지지 않던 문제 → 장비 사실마다 보이는 방향(`view`: 앞/뒤·옆/옆·비스듬히) — 각도 때문에 안 보이는 사실은 상태 문구에도 드러내지 않음.
+  낮은 엄폐물 뒤에 웅크려 가슴이 가려진 인물을 조준 대상으로 못 잡던 문제 → `getAimedNPC` 원뿔 판정이 머리가 보여도 인정(관찰·말 걸기 공통).
+  자막 화자 라벨을 겉모습 기준으로 통일(`[아군]` 외침 → `[파란 표식 병사]`, NPC 의 `talkLabel`)
+- **말 걸기 `DialogueSystem` (E, 1~4)**: 화면 중앙 인물(2단계 `getAimedNPC` 재사용)에게 "정지!" + 화면 맨 아래 대화 메뉴. 실외 20m / 실내 10m, 시야 필요, 빨간 표식 무반응.
+  4초 무입력·시야 상실(0.6초)·멀어짐·E 재입력·사격·사망·정체 드러냄이면 닫힘. **게임은 멈추지 않고** 총은 그대로 — 좌클릭 사격 시 대화 종료.
+  대답은 질문 뒤 '대본'(몇 초 뒤 무슨 말·행동)으로 실시간 실행되고, 판정은 화면에 보여주지 않는다
+- **암구호·실내 기준수·부대 `CountersignSystem`**: 문어/답어 쌍 37개, 실내 기준수 7~12, 위협 단계가 오를 때마다(약 1분) 둘 다 교체 →
+  `[작전 무전] 암구호 변경. 문어 ○○, 답어 ○○` + `실내 기준수 ○` + HUD 암구호 카드 깜박임(교체 직후 20초는 이전 것 취소선). 시작 시 "금일 암구호 하달".
+  아군 부대 3개(철방패대대=파란 방패 / 샛별중대=파란 별 / 봉우리대대=파란 삼각형) — 진짜 아군 분대마다 한 부대, 어깨 패치 모양이 부대와 일치
+- **대답 규칙 `Responses.js`** (숙련도별 반응 표 — 아래 "4단계 숙련도별 반응 표"): 파란 표식 병사(암구호·실내 확인 문답·소속·"총 내려!"),
+  민간인("손 들어!"·신분증·대피). 진짜 아군의 교체 직후 실수→정정(30%), 30초 안 세 번 넘게 물으면 짜증. 숙련도 0 은 막히면 즉시 정체 드러냄(예고 동작 유지),
+  숙련도 1~2 는 '들킨 것 같으면' 기습 가속 또는 도주 → 숨었다가 다른 위치에서 다시 접근하거나 습격을 부름. 질문 자체도 기습까지 남은 시간을 줄임
+- **3D 연출**: 부대 패치 별·삼각형, 신분증 소품(손에 들고 내밂), "총 내려!" 총구 내림 자세, 한 손 늦게 들기, 손을 들면 옷이 올라가 허리띠·숨긴 권총 손잡이가 드러남
+- **대사 데이터 분리 `DialogueLines.js`**: 플레이어·파란 표식 병사·민간인·작전 무전 대사 전부, 종류마다 변형 3~4개, 암구호 단어 쌍·없는 부대명·고유어 숫자
+- **점수·통계**: 문답에서 틀리거나 머뭇거린 위장 적(`npc.dialogueFailed`)을 드러내기 전에 사살 → +200 + '근거 있는 판단' +100. 문답에 막혀 드러내던 중 사살도 '사전 식별'.
+  결과: 문답 횟수(말 걸기 횟수), 문답으로 찾아낸 위장 적, 문답으로 확인한 진짜 인물, 문답 중 기습당함
+- **HUD·브리핑·설정**: 대화 메뉴(겉모습·거리·남은 시간·'응답 대기'), 암구호 카드(설정에서 '항상 표시'(기본)/숨김), 첫 말 걸기·첫 실내 문답 안내 1회,
+  '대상 없음/너무 멀다' 안내. 작전 브리핑에 아군 부대·패치, 말 걸기 조작, 암구호 방식, 실내 기준수 방식(예시)
+- **디버그**: 암구호 현재/이전·기준수·교체 횟수, 대화(없으면 조준) 대상이 아는 것(현재/이전 암구호·기준수·부대명), 문답 통계
+- 다음 단계 준비: `CONFIG.dialogue` 한곳에 문답 수치, `Game.debugSpawn` 테스트 생성 도우미
 
 ## 실행·테스트
 
@@ -117,6 +140,18 @@
   밸런스(여러 시드 300초, 표식만 보고 쏘는 봇): 위장 적은 판당 0~4명(대부분 3~4명), 첫 등장 79~221초(위협 2단계 이후), 겉모습 기준 출현 비율 적 58~64 / 아군 17~21 / 민간인 18~22%.
   후반(위협 7~10)만 따로 돌리면 약 33초에 1명, 아군·민간인 겉모습 중 가짜 약 29%(설정 최대치와 일치). 표식만 믿는 봇은 300초 판에서 0~4회, 후반 긴 판에서 10~15회 기습당한다.
   NPC 31명(적 12·위장 3·아군 6·민간인 10) + 관찰 모드: 드로우콜 203~220, 업데이트 약 1.24ms/프레임.
+- 4단계 테스트 도우미: `__game.debugSpawn(kind, o)` — 상한·예고음 없이 플레이어 근처 숨은 출현 지점(또는 `o.at` 근처 노드)에 즉시 생성.
+  `debugSpawn('disguised', { as: 'ally'|'civilian', skill: 0|1|2, role, mode })`, `debugSpawn('ally', { size, decoy })`, `debugSpawn('civilian', { decoy })`, `debugSpawn('enemy', { type })`.
+  말 걸기는 `__game.input.pressed.add('KeyE')` / `'Digit1'` 후 한 프레임 진행. 상태: `__game.dialogue`(`target`, `reaction`, `busyT`, `idleT`, `options()`, `stats`),
+  `__game.countersign`(`current`, `previous`, `indoorBase`, `stale`, `knowledgeOf(npc)`), 대답 결과는 `dialogue:answer` 이벤트(`outcome`, `fail`).
+- 4단계 검증(같은 Playwright 환경): 1~3단계 회귀(8개 건물 계단, 사망→결과→재시작, 오인 사격→작전 해임, 관찰 모드·위장 적 사전 사살 점수,
+  위장 적 기습/정찰/진짜 행동 시나리오, 시드 결정성, 일시정지) 통과, 콘솔 에러·경고 0건.
+  문답 규칙: 진짜 아군(암구호·소속·총 내림 정답), 위장 아군 숙련 0(도주·머뭇→엉뚱한 단어→기습)/1(이전 답어·없는 부대)/2(현재 답어·패치와 다른 부대),
+  진짜 민간인(손·신분증·대피), 위장 민간인 숙련 0(거부→기습·도주)/1(늦게 듦·신분증 분실→도주)/2(한 손 늦게·위조 신분증·가짜 대피→되돌아옴),
+  실내 확인 문답 20회(진짜 아군 5/5 정답, 위장 숙련 0~2 전원 머뭇거린 뒤 추측), 실외에서 2번 비활성('실내 전용'), 사격 시 대화 종료, 빨간 표식 무반응,
+  암구호 교체(작전 무전 2줄·카드 깜박임·취소선), 도주→숨기→습격 요청/재접근, 총 내린 위장 아군은 85° 시선을 돌리면 기습(안 내린 경우 10초간 없음).
+  말 거는 봇 소크(실제 디렉터 + 12초마다 근처 생성, 6분·2시드): 에러 0. 성능: NPC 31명 + 대화 중(신분증) + 관찰 모드 업데이트 약 1.4ms/프레임
+  (같은 페이지 기준 대화 없음 0.9ms), 드로우콜 196~222(신분증은 보일 때만 +1).
 
 ## 폴더 구조
 
@@ -152,9 +187,10 @@ js/
     Weapon.js         소총 로직 (발사·탄퍼짐·반동·재장전·정조준, 관찰 중·총 드는 중 사격 불가)
     WeaponView.js     1인칭 총기 모델·애니메이션 (별도 씬/카메라 패스, 관찰 중 총 내림)
   npc/
-    NPCBase.js        ★ 모든 인물 NPC 공통 베이스 (trueFaction/apparentFaction, 피해·사망 이벤트, 경로 이동, 장비 조회·적대 판정, 행동 기록·관찰 기록)
+    NPCBase.js        ★ 모든 인물 NPC 공통 베이스 (trueFaction/apparentFaction, 피해·사망 이벤트, 경로 이동, 장비 조회·적대 판정, 행동 기록·관찰 기록, 4단계 대화 자세·화자 라벨)
     HumanoidRig.js    파츠 조립식 인간형 + 절차적 애니메이션 (뼈별 강체 스키닝 SkinnedMesh) — 헬멧·소총·신발·상의·가방 변형, 손 들기·웅크림·짐 들기 자세
                       + 3단계 단서 파츠(어깨 패치·허리 불룩·등 총몸·무전기·조끼 끈·전술 장갑)와 자세(손 숨기기·얼어붙음·무전·완장 뜯기·총 꺼내기), 노란 윤곽
+                      + 4단계: 부대 패치 별·삼각형, 신분증 소품(setCard), 총구 내림·한 손 늦게·신분증 내밂 자세, 옷 올라감(shirtLift: 허리띠·권총 손잡이)
     Outfits.js        ★ 복장 생성 (soldierOutfit: 진영 장비 세트 / civilianOutfit: 사복 무작위) + describeEquipment (장비 데이터)
     Insignia.js       ★ 표식 컴포넌트 (색·형태 교체 가능, 헬멧 형태별 띠, 위장용 'tape' 형태, describe())
     Soldier.js        ★ 적·아군 공통 병사 베이스 (지각·대상 선택·조준·점사·탄창·엄폐 주기·NPC 대상 사격)
@@ -171,23 +207,27 @@ js/
     Populations.js    등록되는 인구: AllyPopulation(증원 분대·교대), CivilianPopulation(초기 배치·등장·대피 유도), AmbushEvent(돌발 조우),
                       DisguisePopulation(위장 적 등장·오판 유도용 진짜 행동 추첨·습격 틈 침투)
   dialogue/
-    VoiceSystem.js    ★ 자막·음성 모듈 (화자 라벨, 우선순위 큐, 채널 차단, Web Speech 선택) — 4단계 문답에서 재사용
+    VoiceSystem.js    ★ 자막·음성 모듈 (화자 라벨, 우선순위 큐, 채널 차단, Web Speech 선택) — 4단계 문답도 이걸로 출력 (player 채널, nodedupe)
     Callouts.js       무전·외침 대사 목록(LINES — 3단계: 동행·낙오병·무전 응답·도움 요청 추가), 방위·위치 묘사(describeLocation: "동쪽 건물 2층 창문" 등)
+    DialogueSystem.js ★ 4단계 말 걸기 (E·1~4, 대상 선택·메뉴·닫힘 조건·대본 실행·통계·첫 안내)
+    Responses.js      ★ 4단계 대답 규칙 = 숙련도별 반응 표 (질문 목록 QUESTIONS, '정지!' 반응, 질문별 대본)
+    DialogueLines.js  ★ 4단계 대사 데이터 (플레이어·파란 표식 병사·민간인·작전 무전, 암구호 단어 쌍, 없는 부대명, 고유어 숫자)
+    Countersign.js    ★ 4단계 암구호·실내 기준수·아군 부대 (교체·작전 무전·인물별 아는 것 knowledgeOf)
   game/
     ScoreSystem.js    점수·콤보·멀티킬·즉응 사살·결과 통계 + 감점(applyPenalty)·콤보 초기화/잠금·어시스트·대피 점수 + 위장 적 식별·근거 있는 판단 보너스
     PenaltySystem.js  ★ 오인 사격 페널티 (감점·콤보 잠금·경고·무전 두절·작전 해임)
     Combat.js         히트스캔 판정 (월드 vs NPC 히트박스, 가까운 쪽)
-    Observation.js    ★ 3단계 관찰 모드 (Q 누르고 있기: 대상 선택·사실 알아채기·거리/조명 제한·메모·노란 윤곽)
+    Observation.js    ★ 3단계 관찰 모드 (Q 누르고 있기: 대상 선택·사실 알아채기·거리/조명/각도 제한·메모·노란 윤곽)
   ui/
-    HUD.js            HUD 전체 (3단계: 관찰 화면·게이지·메모, 첫 안내, 정체 드러냄 방향 경고, "위장 적 사살!")
-    Menus.js          시작(작전 브리핑)·일시정지·결과 화면
-    DebugOverlay.js   디버그 오버레이 (3단계: 위장 여부·남은 단서·기습 조건 진행)
+    HUD.js            HUD 전체 (3단계: 관찰 화면·게이지·메모, 첫 안내, 정체 드러냄 방향 경고, "위장 적 사살!" / 4단계: 대화 메뉴, 암구호 카드, 첫 말 걸기 안내)
+    Menus.js          시작(작전 브리핑)·일시정지(암구호 카드 설정 포함)·결과 화면
+    DebugOverlay.js   디버그 오버레이 (3단계: 위장 여부·남은 단서·기습 조건 진행 / 4단계: 암구호 상태, 대상이 아는 것, 문답 통계)
 ```
 
 ## config 위치
 
 모든 튜닝 수치와 키 설정은 **`js/config.js`** 한 파일에 있다.
-`CONFIG.keys`(키 — 3단계부터 `observe: Q`), `CONFIG.reservedKeys`(E·1~4, 4단계용 예약), `CONFIG.weapon`, `CONFIG.npc`, `CONFIG.threat`(레벨 1 → 최고 레벨 보간 값),
+`CONFIG.keys`(키 — 3단계 `observe: Q`, 4단계 `interact: E`, `dialog1~4: 1~4/숫자 패드`), `CONFIG.weapon`, `CONFIG.npc`, `CONFIG.threat`(레벨 1 → 최고 레벨 보간 값),
 `CONFIG.director`, `CONFIG.score`, `CONFIG.factions`(진영별 표식 색·군복 색), `CONFIG.map`, `CONFIG.atmosphere`, `CONFIG.render`.
 
 2단계 추가:
@@ -214,6 +254,20 @@ js/
 - `CONFIG.score.disguiseId`(+200 위장 적 식별), `CONFIG.score.evidence`(+100 근거 있는 판단)
 - `CONFIG.gearSets.ally.patch: 'shield'`(진짜 아군 어깨 파란 방패 패치), `CONFIG.insignia.tapeColor`(위장 테이프 완장 색 — 진짜 파랑보다 하늘빛)
 
+4단계 추가 (`CONFIG.reservedKeys` 는 없앰 — E·1~4 는 이제 `CONFIG.keys`):
+- **`CONFIG.dialogue`** — 말 걸기·문답 수치 전부
+  - 거리·메뉴: `rangeOutdoor 20`, `rangeIndoor 10`, `coneDeg 5`, `menuTimeout 4`(대답이 끝난 뒤부터 다시 셈), `losGrace 0.6`, `leaveExtra 8`, `holdTime 1.2`
+  - `units` — 아군 부대 3개 `{ name, patch, patchName }` (브리핑·패치·"소속 대!" 공통). `gearSets.ally.patch` 는 기본값이고 실제론 분대 부대의 패치
+  - `countersign { staleWindow 20, realStaleChance 0.3, correctionDelay }`, `indoor { base [7, 12], fakeGuessChance 0.1 }`
+  - 대답 시간: `answerDelay [0.5, 1.0]`(진짜 아군 암구호·소속), `indoorDelay [0.35, 0.65]`, `hesitate [1.3, 2.3]`(머뭇거린 뒤 대답)
+  - 진짜 아군 짜증: `annoy { window 30, maxQuestions 3 }`, `annoyExtraDelay`
+  - 위장 적: `halt`(숙련도별 [멈춤, 못 들은 척, 도주] 확률), `skill0Password`([엉뚱한 단어, 도주, 기습]), `skill0RevealOnStuck 0.35`, `skill0LowerRefuse 0.6`,
+    `skill0HandsFlee 0.4`, `skill2UnitMismatch 0.5`, `suspect { boostChance 0.55, boostTime 12, revealIn [3, 6], oppMul 0.5, pressureQuestions 3 }`,
+    `questionPressure 2.5`, `pressureMinLeft 2.5`, `aimPanicMulInTalk 0.5`, `flee { dist [24, 40], hideTime [8, 15], callChance 0.5 }`,
+    `lowered { real 7, fake 9, backAngle 70, oppMul 0.8 }`, `hands { holdReal 4, late [1.1, 1.8], lag [0.7, 1.2] }`, `idShow 3.5`, `fakeEvac { walk [2.0, 3.6], returnChance 0.5 }`, `hintTime 6`
+- `CONFIG.defaults.countersignCard`(true — 암구호 카드 항상 표시, 일시정지 설정에서 끄면 외워서 플레이), `CONFIG.score.evidence` 는 문답 실패도 근거로 인정
+- 대사 문장은 config 가 아니라 **`js/dialogue/DialogueLines.js`**(쉽게 고칠 수 있게 데이터만 모은 파일)
+
 ## 핵심 클래스와 역할
 
 - **Game**: 시스템 생성·연결, 상태 전환, 루프. `game.time`(진행 중에만 흐르는 게임 시간), `game.runTime`(이번 판 생존 시간)
@@ -232,6 +286,7 @@ js/
   - 3단계: `credits.allyFake / civilianFake`(가짜 크레딧), 생성기 `'disguised'`, `capFor('disguised')`, `disguises`(DisguisePopulation: `spawnFake(as)`, `rollDecoy(kind)`, `onAssault()`),
     `callInAssault(fromNpc)`(정찰형의 습격 요청), `disguiseCount`, `decoyCount`, `spawnAppearance(kind, {as, role, decoy, nearPos, distRange, ...})`
 - **Insignia**: `setColor(hex)`, `setShape('band'|'armband'|'helmet'|'tape'|'none')`, `setVisible`, `describe()` → `{visible, color, colorName, shape, tape}`
+- **HumanoidRig 4단계**: animate 입력 `handsLag, lowered, showCard`, `setCard(visible)`, outfit 필드 `shirtLift`, 패치 `'star'|'triangle'` 추가
 - **HumanoidRig**: `applyOutfit(outfit)`(같은 뼈대에 다른 복장), `animate(dt, {speed, aim, aimPitch, crouch, handsUp, cower, hideHands, handsMode, shock, tear, reach, radioTalk})`, `onHit`, `startDeath`,
   `setHighlight(intensity)`(노란 윤곽). 3단계 outfit 필드: `patch`('shield'|'square'|'round'|null), `waistBulge`, `backRifle`, `radio`, `vestStraps`, `tacticalGloves`
 - **ScoreSystem**: `NPC_KILLED` 구독 → 점수·콤보 계산 → `SCORE_KILL` 발행. `applyPenalty(points)`, `resetCombo()`, `lockCombo(sec)`, `comboLocked`, 어시스트·대피 → `SCORE_EVENT`
@@ -246,6 +301,18 @@ js/
 - **ObservationSystem** (`game.observation`, 3단계): `active`, `weaponDown`(관찰 중 또는 총 드는 중 → 사격·정조준 불가), `target`, `distance`, `progress`, `status`, `memo()`,
   `factsFound`, `anomaliesFound`, `usedOnce`, `reset()`. 게임 루프에서 가장 먼저 갱신(`Game._updatePlaying`)
 - **Clues / Behaviors** (3단계): `GEAR_CLUES`, `BEHAVIOR`, `factsFor(npc, time)` / `moveToward`, `escortTarget`, `pickApproachNode`, `trackApproach`, `trackSquad`, `trackFightFire`, `nearestVisibleHostile`
+- **DialogueSystem** (`game.dialogue`, 4단계): `target`, `open`, `reaction`('stop'|'ignore'|'flee'), `busyT`(대답 대기), `idleT`(메뉴 남은 시간), `options()`(HUD 선택지),
+  `sameBuilding()`, `tryOpen()`(E), `ask(slot)`(1~4), `close(reason)`, `stats { talks, questions, exposed, confirmed, ambushed }`, `notice`, `reset()`.
+  게임 루프에서 관찰 다음에 갱신(`Game._updatePlaying`). 대본(steps)은 대화가 닫혀도(시간 초과·E) 끝까지 실행, 사격·정체 드러냄·죽음이면 버림
+- **Responses** (4단계): `talkKind(npc)`('ally'|'civilian'|'fake'), `QUESTIONS`(겉보기별 메뉴), `haltReaction(npc)`, `respond(npc, q, { cs, number })` → `{ steps: [{ at, say, act, answer: { outcome, fail } }], end }`
+- **CountersignSystem** (`game.countersign`, 4단계): `current/previous {challenge, reply}`, `indoorBase/prevIndoorBase`, `changedAt`, `stale`(교체 후 20초), `sinceChange`, `rotations`,
+  `start()`(판 시작), `rotate()`(THREAT_LEVEL 때), `update(dt)`(작전 무전 송출), `knowledgeOf(npc)` → `{ current, previous, indoor, unit, real }`. 보조: `unitByName`, `unitByPatch`
+- **NPC 대화 공통** (4단계, NPCBase): `talkLabel`('파란 표식 병사'|'민간인'), `sayTalk(text)`, `holdForTalk(sec)`(talkHoldT), `lowerWeapon(sec)`(lowerT → lowered 자세·사격 안 함),
+  `presentCard(sec)`(cardT → 신분증), `lagHands(sec)`(handsLag), `noteQuestion(window)`, `dialogueFailed`, `unit`(진짜 아군 부대).
+  AllySoldier: 대화 중 멈춤(교전 중이면 싸우며 대답)·사선 회피 중지, `lowerT` 동안 사격 안 함. AllySquad: `unit`. CivilianNPC: `commandHands(sec)`, `dlgEvacuate()`.
+  DisguiseController: `talkHalt(reaction)`, `ignoring`, `stopIgnoring()`, `onQuestioned()`, `suspect()`, `startFlee(variant)`, `startFakeEvac()`, `commandHands(hold, lag)`, `onTalkAimed(step)`,
+  모드 추가 `flee → hidden → (call | approach)`, `fakeEvac → (stand | approach)`, `suspectT`, `panicAcc`
+- **Game.debugSpawn(kind, o)** (테스트용): 위 "실행·테스트" 참고
 - **PenaltySystem**: `warnings`, `allyHits/allyKills/civHits/civKills`, `stats()`, `reset()`
 - **VoiceSystem** (`game.voice`): `say({speaker, text, channel, priority, voice, force, duration})`, `mute(channel, sec)`, `isMuted`, `muteRemaining`, `setSpeech(on)`, `clear()`, `history`
 - **NPC 공통 조회**: `npc.getEquipment()` → `{ faction(겉보기), headwear, helmetStyle, weapon, rifleStyle, magazine, footwear, footwearClass, vest, top, bag, elder, insignia:{visible,color,colorName,shape,tape}, hands,
@@ -279,6 +346,8 @@ js/
 `OPERATION_DISMISSED {warnings}`, `CIVILIAN_EVACUATED {npc, position, time}`, `AMBUSH {kind, spawnPoint, npc}`.
 3단계 추가: `DISGUISE_SPAWNED {npc, profile}`, `DISGUISE_REVEALING {npc, reason}`(예고 동작 시작 — 장전음), `DISGUISE_REVEALED {npc, as, role, reason, ambush}`(정체를 드러냄, `ambush` = 먼저 맞아서가 아닌 기습),
 `DISGUISE_KILLED {npc, as}`(드러내기 전 사살 — 점수는 `NPC_KILLED` 에서), `DISGUISE_CALLED {npc}`(정찰형이 습격을 부름), `OBSERVE_START {first}`, `OBSERVE_FACT {npc, fact, distance}`.
+4단계 추가: `DIALOGUE_OPEN {npc, indoor, first, firstIndoor}`, `DIALOGUE_ASK {npc, question, number}`, `DIALOGUE_ANSWER {npc, outcome, fail}`(통계·테스트용 — 화면엔 판정 없음),
+`DIALOGUE_CLOSE {npc, reason}`, `COUNTERSIGN_CHANGED {current, previous, indoorBase, prevIndoorBase, initial}`. `DISGUISE_REVEALING/REVEALED` 의 reason 에 `'questioned'`(문답에 막혀 드러냄) 추가.
 위장 적의 `NPC_DAMAGED/KILLED` 는 `trueFaction: 'enemy'`, `apparentFaction: 'ally'|'civilian'`(드러내기 전) 으로 나간다 — 오인 사격 페널티 없음.
 
 ## 3단계 단서 목록과 판정 규칙
@@ -295,10 +364,10 @@ js/
 | --- | --- | --- | --- | --- |
 | 아군 | `curvedRifle` | 굽은 탄창·나무 개머리판 소총 | 굽은 탄창 소총 | 직선 탄창 소총 |
 | 아군 | `enemyHelmet` | 챙 있는 둥근 헬멧 | 챙 있는 둥근 헬멧 | 낮고 넓은 헬멧 (뒷목 가리개) |
-| 아군 | `patchMissing` / `patchWrong` | 어깨 패치 없음 / 네모·동그라미 패치 | 어깨 부대 패치 없음 / 어깨 패치 모양이 다름 | 어깨 부대 패치: 파란 방패 |
+| 아군 | `patchMissing` / `patchWrong` | 어깨 패치 없음 / 올리브색 네모·누런 동그라미 패치 | 어깨 부대 패치 없음 / 어깨 패치: 올리브색 네모·누런 동그라미 | 어깨 부대 패치: 파란 방패·별·삼각형 (4단계: 부대마다) |
 | 아군 | `tapeBand` | 하늘빛 테이프 완장·헬멧 띠, 비스듬히 엉성하게 감김 + 늘어진 끝 | 완장이 테이프로 엉성하게 감겨 있음 | 파란 완장·헬멧 띠 |
 | 민간인 | `combatBoots` | 군화 | 군화 착용 | 운동화·구두·작업화 |
-| 민간인 | `waistBulge` | 허리춤 불룩함 | 허리춤이 불룩함 | (메모 없음) |
+| 민간인 | `waistBulge` | 허리춤 불룩함 (손을 들면 옷이 올라가 권총 손잡이·권총집이 드러남) | 허리춤이 불룩함 / 손을 들자 허리춤에 권총 손잡이가 드러남 | (메모 없음 — 손을 들면 허리띠만 보임) |
 | 민간인 | `backRifle` | 등 뒤 총몸 윤곽 + 총구·개머리 끝 | 등 뒤로 길쭉한 총몸 윤곽이 비침 | (메모 없음) |
 | 민간인 | `radio` | 가슴 무전기 + 안테나 | 가슴에 무전기를 달고 있음 | (메모 없음) |
 | 민간인 | `vestStraps` | 옷 위 조끼 끈 | 옷 위로 조끼 끈이 보임 | (메모 없음) |
@@ -306,6 +375,8 @@ js/
 
 - 그 밖의 중립 장비 사실: 사복 종류(셔츠·재킷·코트·스웨터, 노인), 짐 가방·배낭, 군화(군인), 빨간 완장(드러낸 적).
 - 표식 사실(`glow`)은 빛나서 어두운 실내에서도 가까우면(38m 안) 손전등 없이 메모된다.
+- 보이는 방향(`view`, 4단계 전 수정): 어깨 패치 `side`(인물 정면 기준 25~140°에서 볼 때), 등 뒤 총몸 `back`(75° 이상), 허리춤·무전기 `front`(100° 이하), 나머지 `any`.
+  옷이 올라가 드러난 권총 손잡이는 `any`.
 
 ### 행동 사실 (`npc/Clues.js` `BEHAVIOR` — `npc.noteBehavior(key)` 로 기록)
 | 겉보기 | 이상 (의심 근거) | 기록 조건 | 진짜도 보이는 경우 |
@@ -323,6 +394,18 @@ js/
 | 민간인 | `longWatch` 한곳에서 이쪽을 오래 지켜봄 / 창가에서 오래 내다봄 | 정찰형이 6초 넘게 지켜봄 | — |
 | 민간인 | `radioTalk` 무전기에 대고 무언가 말함 | 정찰형의 습격 요청 | — |
 
+4단계 말 걸기 행동 (대답 '내용'은 기록하지 않음 — 판정은 플레이어 몫):
+
+| 이상 (의심 근거) | 기록 조건 | 중립 (진짜도) |
+| --- | --- | --- |
+| `ignoredHalt` "정지!"를 못 들은 척 계속 걸어감 | 위장 적 '못 들은 척' | `stoppedOnHalt` "정지!"에 멈춰 섬 |
+| `fledTalk` "정지!"에 / 질문을 받자 달아남 | 위장 적 도주 | `loweredWeapon` 지시에 총구를 내림 |
+| `hesitated` 질문에 머뭇거림 | 위장 적의 머뭇거림 (실내 문답은 위장 적이면 항상) | `showedEmptyHands` 빈손을 들어 보임 |
+| `refused` 지시를 거부함 | 숙련 0 의 거부 | `showedId` 신분증을 보여 줌 (위조 포함) |
+| `lateHands` / `oneHandLate` "손 들어!"에 늦게 / 한 손을 늦게 듦 | 숙련 1 / 2 | `evacOk` 대피하라는 말에 대피로로 감 |
+| `noId` 신분증이 없다고 함 | 숙련 0~1 | `annoyed` 거듭 묻자 짜증을 냄 |
+| `fakeEvac` 대피하라는 말에 가다가 멈춤 / 되돌아옴 | 위장 민간인 | |
+
 중립 행동 사실: `withSquad` 분대와 함께 움직임, `firedAtEnemy` 적을 향해 사격함(가짜 아군의 빗나가게 쏘기도 여기에 기록), `radioAck` 아군 무전에 반응함, `escorting` 뒤에서 따라오며 엄호함,
 `cowered` 총성에 웅크림(가짜의 웅크리는 척 포함), `handsUpQuick` 조준하자 바로 손을 듦, `helpCry` 도와달라고 외침(숙련된 가짜 민간인도), `fled` 대피로 쪽으로 달아남.
 
@@ -332,7 +415,8 @@ js/
 - 장비 사실은 38m 이내 + 밝음(실내 어둠 0.6 이상이면 손전등 범위·각도 안) 필요. 행동 사실은 거리·조명 제한 없음(이미 일어난 일).
 - 찾은 사실은 인물별로 저장(`npc.observed.found`) — 다시 관찰해도 이어서 쌓인다. 상태 문구: "관찰 중…", "어두워서 장비가 안 보임 — 손전등(F)", "너무 멀어서 장비가 안 보임", "더 알아낸 것 없음".
 - 이상 사실을 찾으면 `observed.anomalies++`, 8초 노란 윤곽, 알아챔 효과음(이상/중립 음이 다름). 결과 화면의 "관찰로 찾은 이상 단서" 에 집계.
-- 사살 점수의 "근거 있는 판단"(+100) 은 그 인물의 `observed.anomalies > 0` 일 때.
+- 장비 사실은 보는 각도도 맞아야 메모된다(위 `view`). 각도 때문에 안 보이는 사실은 상태 문구에 드러내지 않는다("더 알아낸 것 없음"과 같게).
+- 사살 점수의 "근거 있는 판단"(+100) 은 그 인물의 `observed.anomalies > 0` 이거나 4단계 문답에서 틀리거나 머뭇거렸을 때(`dialogueFailed`).
 
 ## 위장 프로필 구조 (`npc.disguise`, `npc/Disguise.js` `rollDisguiseProfile`)
 
@@ -347,12 +431,63 @@ js/
                                     //   아군형: loner, noFire|fireAir, ignoreRadio, stare, fromEnemySide / 민간인형: hideHands, noCower, lateHands|noHands
   handsMode: 'back' | 'pocket',     // 손 숨기는 방식
   infiltrate: boolean,              // 습격 구간 혼란을 틈탄 침투 (섞이는 시간 짧음)
-  revealed, revealedAt, revealReason, revealStarted,  // 'back'|'reload'|'observe'|'patience'|'scout'|'cornered'|'damaged'
+  revealed, revealedAt, revealReason, revealStarted,  // 'back'|'reload'|'observe'|'patience'|'scout'|'cornered'|'damaged'|'questioned'(4단계)
+  patchUnit: '샛별중대',            // 4단계: 어깨에 단 부대 패치 (patch 단서가 있으면 그게 우선)
+  unitClaim: '봉우리대대',          // 4단계: "소속 대!" 대답 — 숙련 0: 어색한 없는 부대 / 1: 그럴듯한 없는 부대 / 2: 진짜 부대명(skill2UnitMismatch 확률로 패치와 다름)
 }
 ```
 
 - 숙련도 효과(3단계): 숙련될수록 행동 성향이 적고, 관찰 모드를 기회로 삼는 데 더 오래 기다리며(×(1 + 0.6·skill)), 조준당했을 때 버티는 시간이 길고(×(1 + 0.3·skill)),
-  가짜 민간인은 "도와주세요!"·"쏘지 마세요!" 를 외칠 확률이 높다. 4단계에서는 암구호·실내 문답에 얼마나 잘 대답할지를 이 값으로 정하면 된다.
+  가짜 민간인은 "도와주세요!"·"쏘지 마세요!" 를 외칠 확률이 높다.
+- 4단계: 숙련도가 곧 문답 능력 — 아래 "4단계 숙련도별 반응 표". `rollDisguiseProfile(as, threat, { skill })` 로 숙련도를 지정할 수 있다(테스트·디버그).
+
+## 4단계 대화 시스템 구조
+
+```
+E (game.dialogue.tryOpen)
+  └ getAimedNPC({ maxDistance: 22, coneDeg: 5 }) → 거리(실외 20 / 실내 10)·겉보기(빨간 표식이면 무반응) 확인
+  └ [나] "정지!" + Responses.haltReaction(npc) → 'stop'(멈춰 섬) | 'ignore'(위장: 못 들은 척) | 'flee'(위장: 도주)
+  └ 메뉴 열림 (HUD #dialog-menu): Responses.QUESTIONS[겉보기] — 파란 표식: 암구호·실내 확인 문답(같은 건물에서만)·소속·총 내려 / 민간인: 손 들어·신분증·대피
+1~4 (dialogue.ask)
+  └ [나] 질문 대사 (DialogueLines) → Responses.respond(npc, q, ctx) → 대본 steps 를 실시간 실행
+       say: npc.sayTalk(겉모습 라벨) / act: 각 AI 의 행동(멈춤·총 내림·손 들기·신분증·대피·도주·정체 드러냄…) / answer: 통계·dialogueFailed
+  └ 대답이 끝날 때까지 메뉴는 '응답 대기', 끝나면 4초 타이머 다시
+닫힘: 4초 무입력 · 시야 0.6초 상실 · (말 걸기 거리 + 8m) 멀어짐 · E · 사격(WEAPON_FIRED) · 상대 사망 · 정체 드러냄(DISGUISE_REVEALING) · 플레이어 사망/해임
+```
+- 대화 중에도 모든 시스템이 그대로 돈다(관찰 모드와 동시에도 가능). 총은 들고 있고 정조준·재장전·이동 모두 가능.
+- 대화 상대는 2단계 '겨누면 손 들기' 반응을 하지 않는다("손 들어!"로 따로 시험). 위장 민간인은 대신 궁지 압박만 쌓인다(숙련 1~2 는 절반).
+- 멈춰 선 상대는 대화 동안 서 있고(talkHoldT), 닫힌 뒤 1.2초 더 서 있다가 하던 일로 돌아간다. 진짜 아군은 적과 교전 중이면 싸우면서 대답.
+- 대사 위치: **`js/dialogue/DialogueLines.js`** (DLINES 키별 변형 목록, `{c}{r}{p}{w}{n}{a}{unit}{sq}{dir}` 치환). 화자 라벨은 `SPEAKER`.
+
+## 4단계 암구호·실내 기준수 규칙
+
+- **암구호**: 문어/답어 쌍(`PAIRS` 37개). 판 시작에 '금일 암구호 하달' + 직전 쌍을 '유출된 이전 암구호'로 둔다. 위협 단계가 오를 때마다(THREAT_LEVEL, 약 1분) 교체 —
+  `[작전 무전] 암구호 변경. 문어 ○○, 답어 ○○.` → 1.6초 뒤 `실내 기준수 ○.` (아군 사살 무전 두절과 무관하게 들림), HUD 카드 3초 깜박임, 20초간 이전 것 취소선.
+  플레이어는 질문할 때 현재 문어를 자동으로 외친다(메뉴에 단어를 보여주지 않음 — 카드를 숨기면 무전으로 들은 걸 기억해야 함).
+- **실내 기준수**: 7~12(직전 값과 다르게). 플레이어가 외치는 수는 1 ~ (기준수−1) 무작위, 정답 = 기준수 − 외친 수. 합이 맞는지는 표시하지 않는다.
+  아군 부대 안에서만 공유 → 위장 적은 숙련도와 무관하게 모름(머뭇거린 뒤 추측, `fakeGuessChance` 10%로 우연히 정답). **같은 건물 안**(플레이어·상대 모두 `getIndoorInfo` 같은 건물)일 때만 물을 수 있다.
+- **아군 부대**: 진짜 아군 분대는 생성 때 `config.dialogue.units` 중 하나 → 분대원 전원의 어깨 패치 = 그 부대 패치, "소속 대!"에 "{부대} {분대 호출명} 분대" 로 답함.
+- 그 인물이 아는 것(`countersign.knowledgeOf`): 진짜 아군 = 현재·이전 암구호·기준수·자기 부대 / 위장 숙련 2 = 현재·이전 암구호, 진짜 부대명 하나 / 숙련 1 = 이전(유출) 암구호, 가짜 부대명 / 숙련 0 = 없음.
+
+## 4단계 숙련도별 반응 표 (`dialogue/Responses.js`)
+
+| 질문 | 진짜 | 위장 숙련 0 | 위장 숙련 1 | 위장 숙련 2 |
+| --- | --- | --- | --- | --- |
+| "정지!" | 멈춰 돌아봄 (60% 대답 "왜 그래?") | 멈춤 30 / 못 들은 척 35 / 도주 35% | 60 / 30 / 10% | 95 / 5 / 0% |
+| 암구호 | 0.5~1초 현재 답어. 교체 후 20초 안 30%: 이전 답어 → 1초 뒤 "아, 바뀌었지! ○○!" | 머뭇("어... 그게...") → 엉뚱한 단어 50 / 도주 25 / 바로 기습 25% | 0.5~1초 **이전 답어** (자신 있게, 정정 없음) | 0.5~1초 **현재 답어** — 암구호로는 구분 불가 |
+| 실내 확인 문답 | 0.35~0.65초 정답 | 머뭇 → 추측(10% 정답) | 머뭇 → 추측 | 머뭇 → 추측 |
+| 소속 대! | 0.5~1초 자기 부대(패치 일치) | 머뭇 → 어색한 없는 부대 | 그럴듯한 없는 부대 | 진짜 부대명 (50% 패치와 다른 부대) |
+| 총 내려! | "아군이라니까, 진정해!" + 7초 총구 내림 | 거부 60 / 기습 40% | 따르는 척 9초 — 그동안 시선을 70° 넘게 돌리면 기습 기회(필요 시간 ×0.8) | 같음 |
+| 손 들어! | 즉시 빈손 4초 | 도주 40 / 거부 60% | "...알았어요" 1.1~1.8초 뒤 듦 | 들지만 한 손이 0.7~1.2초 늦음 |
+| 신분증 | 0.6~1초 신분증을 꺼내 보여 줌 | 머뭇 → "잃어버렸어요" | 머뭇 → "잃어버렸어요" | 위조 신분증 (겉보기 같음) |
+| 대피하세요 | 대피로로 감 | 가는 척 2~3.6초 → 멈춤 50 / 되돌아옴 50% | 같음 | 같음 |
+| 30초 안 4번째 질문부터 | 짜증("몇 번을 말해!") + 대답 1.2~1.8초 늦음 | — | — | (아군형) 같게 흉내 |
+
+- 막혔을 때(머뭇·거부·분실): 숙련 0 → 35% 즉시 정체 드러냄(`'questioned'`, 예고 동작 0.5~0.8초 유지). 숙련 1~2 → '들킨 것 같음'(실내 추측·신분증 분실 뒤, 질문 3번째부터):
+  55% 기습 가속(붙어 있으면 3~6초 안에 기습, 기회 필요 시간 ×0.5, 12초) / 45% 도주(24~40m, 가능하면 시야 밖) → 8~15초 숨었다가(보이는 동안은 안 셈) 50% 습격 요청, 아니면 다른 위치에서 재접근.
+- 질문 한 번마다 '오래 붙어 있음' 기습까지 남은 시간 −2.5초(단 최소 2.5초는 남김) — 묻는 행위가 기습을 부를 수 있다.
+- 도주 중·숨은 위장 적은 질문에 대답하지 않는다. 못 들은 척 걷던 위장 적은 질문을 받고서야 "...저요?" 하고 멈춘다.
+- 실패로 치는 대답(`fail` → `dialogueFailed`, 점수 '근거 있는 판단'): 엉뚱한 단어·유출 답어·추측(맞혀도 머뭇거렸으므로)·없는 부대·패치와 다른 부대·거부·도주·기습·늦은 손·한 손 늦음·신분증 분실·가짜 대피(멈추거나 되돌아올 때).
 
 ## 다음 단계 연결 지점
 
@@ -367,28 +502,19 @@ js/
 - 새 단서는 ① `HumanoidRig` 파츠/자세 → ② `Outfits` 필드·`describeEquipment` → ③ `Clues.js` `GEAR_CLUES`(위장 프로필에서 고를 수 있게) + `gearFacts`(관찰 메모 문구) 순서로 추가한다.
   새 행동 단서는 `BEHAVIOR` 에 키를 만들고, 진짜·가짜 양쪽에서 같은 조건으로 `noteBehavior(key)` 를 부르면 관찰 모드가 자동으로 읽는다.
 
-### 4단계 — 말 걸기·구두 문답
-- 조준 대상: `game.npcs.getAimedNPC({ maxDistance, coneDeg })` → `{ npc, distance }` (민간인 손 들기 반응도 이걸 0.1초마다 쓴다: `NPCManager._updateAim`)
-- 실내 판별: `game.world.isIndoors(pos)` / `game.world.getIndoorInfo(pos)` → `{ building, floor, room }`
-- 대사·자막: `game.voice.say({ speaker: '민간인', text, channel: 'shout', priority, voice: npc.voice })` — NPC 마다 `npc.voice {id, pitch, rate}` 가 있어 TTS 를 켜면 사람마다 목소리가 다르다.
-  플레이어 대사도 같은 모듈로(`speaker: '나'` 등). 대사 목록은 `dialogue/Callouts.js` 의 `LINES` 패턴을 따르면 된다.
-- 민간인의 손 들기(`npc.handsUp`)·웅크림(`npc.cower`)은 애니메이션 입력값이라 "손 들어" 명령도 이 값을 쓰면 된다.
-- 키 `E`, `1`~`4` 는 `CONFIG.reservedKeys` 에 예약. `Input.onKey` 콜백 또는 `Input.down` 으로 읽으면 된다.
-- 판단 통계: `NPC_DAMAGED/KILLED` 의 `timeSinceFirstSeen`, `apparentFaction`, `FRIENDLY_FIRE` 활용.
-- **3단계에서 이어받을 것**:
-  - 위장 숙련도 `npc.disguise.skill`(0~2): 암구호·실내 문답에서 얼마나 그럴듯하게 대답할지(0 = 자주 틀림·머뭇거림, 2 = 완벽 위장이라 문답이 유일한 확인 수단).
-    `npc.disguise.as`(아군인 척/민간인인 척)로 질문 종류(암구호 vs 신원 문답)를 고른다. 진짜 아군·민간인은 `npc.disguise` 가 없다(`EnemySoldier` 가 아님).
-  - 정체 드러내기: `npc.ctl.startReveal(reason)` — 문답에서 들통나면 새 사유(예: `'questioned'`)로 부르면 예고 동작·장전음·점수 판정(`identifiedKill`)이 그대로 동작한다.
-    단, 사유가 `'damaged'` 가 아니면 드러내는 중 사살은 '사전 식별'로 치지 않으니(`identifiedKill`), 문답으로 밝혀낸 경우를 인정하려면 그 규칙을 함께 고친다.
-  - 문답 중 기습: 위장 적의 기습 조건은 `DisguiseController._checkAmbush` 에 모여 있다(기회: 등·재장전·관찰). 말 거는 중을 기회로 삼으려면 여기에 추가.
-  - "손 들어" 명령: 진짜 민간인은 `CivilianNPC.onAimedAt` 처럼 곧바로 `handsUp`, 가짜는 `DisguiseController.onAimedAt` 처럼 늦게/안 듦 → 명령도 같은 성향(`traits`의 `lateHands`/`noHands`)을 따르게.
-  - 문답 결과도 행동 기록으로 남기면(`noteBehavior('wrongPassword')` 등 + `BEHAVIOR` 항목) 관찰 메모·노란 윤곽·"근거 있는 판단" 점수에 자동으로 이어진다.
-  - 대사는 `Callouts.js` `LINES`(3단계에 `allyEscort`, `allyStraggler`, `allyAck`, `civHelp` 추가), 출력은 `game.voice.say(...)`. 관찰 메모 UI(`#observe-memo`)는 문답 기록 표시에도 쓸 수 있다.
-  - 관찰 모드와 키가 겹치지 않게 `Q` 는 관찰 전용, 말 걸기는 `E`, 선택지는 `1~4`(`CONFIG.reservedKeys`, 지금 아무 데서도 읽지 않음).
+### 4단계 — 완료
+- 대화는 `DialogueSystem`(흐름) + `Responses`(규칙) + `DialogueLines`(문장) + `CountersignSystem`(그날의 약속)로 나눴다. 새 질문은
+  ① `Responses.QUESTIONS` 에 항목 → ② `respond()` 의 진짜/위장 분기에 대본 → ③ `DialogueLines.DLINES` 에 대사 → ④ 필요하면 NPC 행동 메서드 + `Clues.BEHAVIOR` 기록 순서로 추가한다.
+- 판정을 화면에 띄우지 않는 원칙: 대답 결과는 `DIALOGUE_ANSWER` 이벤트·`npc.dialogueFailed`·통계에만. 관찰 메모에는 '머뭇거림·거부·도주' 같은 행동만 남는다.
 
-### 5단계 — 다듬기
-- 난이도 곡선은 `CONFIG.threat`(레벨별 상한·명중률·반응 시간·우회 확률·웨이브 크기·출현 간격·유형 가중치)만 조절하면 된다.
-- 결과 화면(`Menus.showResult`)·기록(`Records`)이 이미 있다.
+### 5단계 — 다듬기 (연결 지점)
+- **난이도 곡선**: `CONFIG.threat`(적 수·명중률·반응·우회·웨이브·간격·유형) + `CONFIG.disguise`(위장 비율·상한·장비 단서 수·기습 조건·정찰) + `CONFIG.dialogue`
+  (숙련도별 반응 확률, 질문 압박, 도주·기습 가속, 실내 기준수 추측 확률)를 함께 조절. 위장 숙련도 분포는 `disguise.gearClues`(장비 단서 수 → 숙련도)로 정해진다.
+  암구호 교체 주기는 지금 위협 단계(`threat.secondsPerLevel`)에 묶여 있다 — 따로 두려면 `CountersignSystem` 에 타이머를 추가.
+- **결과 화면 개편**: `Game._finishRun` 이 모으는 결과 객체 `r`(ScoreSystem.result + 정확도 + PenaltySystem.stats + 관찰 + 문답 통계 `dialogue*`)를 `Menus.showResult` 가 행 목록으로 그린다.
+  판단 통계는 `NPC_DAMAGED/KILLED`(`timeSinceFirstSeen`, `apparentFaction`), `FRIENDLY_FIRE`, `DISGUISE_*`, `OBSERVE_FACT`, `DIALOGUE_*` 이벤트를 구독해 더 만들 수 있다.
+- **연출·사운드**: 전부 `audio/AudioSystem.js` 합성. 대화는 TTS(설정) 외엔 효과음이 없다 — 플레이어 외침·무전 교체음 등을 추가할 자리는 `DialogueSystem._sayPlayer`, `CountersignSystem.update`.
+- **최적화**: NPC 1명 = 드로우콜 2(몸·표식) + 신분증을 보일 때 1. 업데이트 비용은 디버그 오버레이 `ms` 와 위 성능 측정 방법 참고. 실기기 FPS 측정이 남아 있다.
 
 ## 임의로 정한 설계 결정
 
@@ -492,6 +618,33 @@ js/
 50. **도움 요청 민간인의 거리**: 플레이어 3.2~5.5m(등 뒤·옆 선호)에서 멈추고, 2.2m 안으로 붙으면 다른 자리로. 조준선 위에 오래 서 있거나 몸을 비비지 않게.
 51. **대피 퇴장(2단계 잔여 수정)**: 대피 지점에 닿은 민간인은 플레이어 화면에 안 보일 때 사라진다(최대 15초 대기 후엔 그냥 퇴장).
 
+### 4단계 설계 결정
+
+52. **대화 = 실시간 '대본'**: 질문하면 대답이 몇 초 뒤 무슨 말·행동으로 나올지 대본을 만들어 게임 시간으로 실행한다. 메뉴는 대답을 기다리는 동안 '응답 대기'로 막고,
+    끝난 뒤부터 4초 타이머를 다시 센다(대답을 듣는 시간 때문에 메뉴가 닫히지 않게). 대화가 시간 초과·E 로 닫혀도 이미 시작한 대답은 마저 하고, 사격·정체 드러냄·죽음이면 끊는다.
+53. **거리 판정 '실내 10m'**: 플레이어나 상대 중 한쪽이라도 건물 안이면 10m(실내는 좁고 문 너머 소리가 막힘). 시야는 가슴 또는 머리가 보이면 인정(낮은 엄폐물 뒤 인물).
+54. **대화 상대는 '겨눔' 반응 제외**: 말을 거는 동안엔 상대에게 총구가 향하는 게 당연하므로 2단계 '겨누면 손 들기'를 끄고 "손 들어!"로 따로 시험한다(진짜·가짜 공정하게).
+    위장 민간인의 궁지 압박(겨눠지면 먼저 기습)은 계속 쌓이되 숙련 1~2 는 절반 — 대화 자체가 위험하지만 숙련된 위장은 태연한 척한다.
+55. **암구호 교체 = 위협 단계 상승 시점**: '약 1분마다'를 위협 단계(1분)와 맞춰 이벤트 하나로 묶었다. 실내 기준수도 같은 순간 따로 뽑는다(직전 값과 다르게). 무전은 지휘부 채널이라 무전 두절과 무관.
+    판 시작 시 '어제 암구호'를 이전 암구호로 두어 숙련 1 위장 적의 '유출된 답어'가 처음부터 존재한다(카드엔 교체 직후 20초만 이전 것을 보여줌).
+56. **실내 확인 문답은 '같은 건물 안'에서만**: 둘 다 같은 진입 가능 건물의 실내일 때만 메뉴 2번이 열린다. 플레이어가 외치는 수는 게임이 정해 계산 부담은 플레이어에게(자동 판정 없음).
+    위장 적은 숙련도와 무관하게 항상 머뭇거린다 — 가장 확실한 수단이지만 실내로 끌어들이는 수고가 든다.
+57. **아군 부대 3개와 패치 모양**: 3단계의 '파란 방패' 기준을 부대별 파란 패치(방패·별·삼각형)로 넓혔다. 가짜 패치(올리브색 네모·누런 동그라미)는 색부터 달라 기존 단서가 유지된다.
+    숙련 2 위장 적은 진짜 부대명을 대지만 절반은 자기 패치와 다른 부대 — 브리핑의 부대↔패치를 기억하는 플레이어만 잡아낼 수 있는 미묘한 단서.
+58. **진짜도 헷갈리게**: 교체 직후 20초 안 진짜 아군 30%가 이전 답어를 말했다가 정정(위장 숙련 1 은 정정하지 않음) — '첫 대답만 듣고 쏘기'를 막는다.
+    진짜 아군도 30초 안에 4번째 질문부터 짜증을 내며 대답이 늦어진다(감점 없음). 숙련 2 위장 아군도 이 짜증을 흉내 낸다.
+59. **신분증은 덜 확실한 수단**: 숙련 2 의 위조 신분증은 겉보기가 진짜와 같다(같은 소품). 숙련 0~1 만 "잃어버렸어요".
+60. **"손 들어!"와 숨긴 무기**: 손을 들면(이유와 무관하게) 사복의 옷이 올라가 허리띠가 보이고, 허리춤에 숨긴 무기가 있으면 권총 손잡이·권총집이 드러난다(3D + 관찰 사실 '손을 들자…', 각도 무관).
+    3단계 장비 단서와 4단계 명령이 맞물리게 한 것.
+61. **도주 → 숨기 → 재등장**: 도주한 위장 적은 24~40m(가능하면 시야 밖)로 달아나 8~15초(플레이어에게 보이는 동안은 시간이 안 감) 숨었다가 50% 습격 요청(정찰형과 같은 무전 동작), 아니면 다른 위치에서 재접근.
+62. **'들킨 것 같음'의 기습 가속은 즉시가 아니라 3~6초 뒤**: 틀린 대답을 듣고 판단할 시간이 남게. 질문 압박도 남은 시간을 2.5초 아래로는 줄이지 않는다.
+    숙련 0 의 즉시 정체 드러냄·바로 기습도 3단계 예고 동작(0.5~0.8초 + 장전음)은 그대로.
+63. **'사전 식별' 확장**: 문답에 막혀 드러내던 중(`'questioned'`) 사살도 플레이어의 판단으로 인정(+200). 문답 실패(`dialogueFailed`)는 관찰 이상 단서처럼 '근거 있는 판단'(+100).
+    진짜를 확인한 것 자체엔 점수가 없고 통계만(실수하지 않은 것이 보상).
+64. **화자 라벨은 겉모습뿐**: 대화·외침 자막은 `[파란 표식 병사]`/`[민간인]`(진짜·가짜 공통), 플레이어는 `[나]`, 암구호 교체는 `[작전 무전]`. 분대 무전 `[아군 무전 · 알파]` 는 진짜 분대만 쓰므로 유지.
+65. **대화와 관찰은 독립**: 관찰 모드(총 내림)와 대화(총 듦)를 동시에 할 수 있다 — 서로 막지 않고, 대화 상대에게 관찰도 그대로 된다.
+66. **암구호 카드 숨김 = 난이도 옵션**: 카드를 끄면 작전 무전으로 들은 단어를 기억해야 한다. 질문할 때 문어는 자동으로 외치므로 기억할 건 답어와 기준수.
+
 ### 기대 점수 분석 (오인 사격 수치 근거)
 
 - 적 사살 1명 ≈ 기본 100 + 즉응 50(+헤드샷 50) → 150~200, 콤보가 이어지면 ×1.5~×4.
@@ -515,6 +668,14 @@ js/
 - 실측: 표식만 믿고 위장을 무시하는 봇은 300초 판에서 기습 0~4회, 위장 적에게 받은 피해 0~44(그 외 8~112). 후반부터 시작한 긴 판에선 기습 10~15회, 위장 적 피해 84~211(그 외 68~272)로
   다른 적 전체와 비슷해진다 — 후반엔 위장을 무시할 수 없게.
 
+### 4단계 기대 점수 (문답)
+
+- 문답은 시간을 쓰는 만큼 확실해진다: 실외 암구호 1회 ≈ 1.2~2초(질문 + 대답), 실내 문답도 비슷하지만 같은 건물 안이어야 한다. 그동안 다른 적의 즉응 사살(2초)·콤보(5초) 기회를 놓친다.
+- 위장 적을 문답으로 가려 쏘면 300~500(+ 콤보) — 행동만 보고 쏘는 기대값(진짜 비율 1/3 이면 약 −330)보다 확실히 낫지만, 묻는 동안 기습을 부를 수 있다
+  (숙련 0 은 35% 즉시 드러냄, 1~2 는 들킨 것 같으면 3~6초 안에 기습 또는 도주).
+- 숙련 2(완벽 위장)는 실외에서 암구호로 못 가리고(소속을 물어 패치와 비교하면 절반은 잡힘), 실내 문답으론 항상 머뭇거림 → 후반 완벽 위장 대응 수단이 생겼다.
+- 실측(헤드리스, 강제 생성): 실내 문답 20회 — 진짜 아군 5/5 정답·즉답, 위장(숙련 0~2) 15/15 머뭇거린 뒤 오답(추측 정답 0회). 소크 봇(6분·5분): 말 걸기 10회·질문 28회씩, 위장 적을 문답으로 1~2명 찾아 그중 1명을 사전 식별 + 근거 있는 판단으로 사살.
+
 ## 알려진 한계 / 개선 후보
 
 - 실제 브라우저 FPS 는 이 환경(헤드리스)에서 측정하지 못했다. 드로우콜·CPU 시간 기준으로만 확인 — 5단계에서 실기기 프로파일링 필요.
@@ -527,8 +688,13 @@ js/
 - 진입 불가 건물의 창문은 텍스처일 뿐이라 들여다볼 수 없다(창문 사수·실내전은 진입 가능 건물에서만).
 - 헤드리스 봇 기준 밸런스는 대략적이다. 사람 플레이 테스트로 `CONFIG.threat`·`CONFIG.npc.accuracy` 조정 권장.
 - (3단계) 위장 밸런스도 봇 기준이다. 후반 기습 피해가 크게 느껴지면 `CONFIG.disguise.ambush`(`patience`·`accuracyMul`·`opportunityDelay`)와 `allyChance/civilianChance`·`maxActive` 를 조정.
-- (3단계) 관찰은 보는 각도를 따지지 않는다 — 앞에서 봐도 '등 뒤 총몸 윤곽'이 메모될 수 있다(거리·조명·가림만 판정). 맨눈 단서와 조금 다를 수 있다.
 - (3단계) 행동 기록은 플레이어가 그 순간을 보지 않았어도 남는다(관찰 = '그 인물이 한 일을 알아챔'으로 단순화). 예: 다른 곳에서 무전을 무시한 일도 나중에 메모될 수 있다.
 - (3단계) 동행·도움 요청처럼 플레이어 3~5m 에 붙는 진짜 인물이 있을 때 급히 몸을 돌려 쏘면 오인 사격이 난다(의도된 긴장 요소지만, 봇 측정에서 남은 오인 사격의 대부분).
 - (3단계) 정찰형의 감시 자리는 시야 검사 40회 안에서 고르므로 건물이 빽빽한 곳에선 못 찾고 다가가는 경우가 있다. 1단계 창문 사수는 여전히 창 노드(벽에서 약 1m 안쪽)에서 쏘아 창 각도 밖은 못 본다(정찰형만 창 쪽으로 0.55m 다가선다).
 - (3단계) 위장 적의 '쏘지 않음'·'허공 사격'은 피해 판정이 없는 흉내 사격이라, 근처 적의 제압 반응(`onSuppressed`)을 일으키지 않는다.
+- (4단계) 문답 밸런스(숙련도별 반응 확률·질문 압박·도주)는 강제 생성 테스트와 단순한 봇으로만 확인했다. 사람 플레이로 `CONFIG.dialogue` 조정 권장.
+- (4단계) 대화 상대는 한 명뿐이다(분대 전체에 묻기·여러 사람 동시 대화 없음). 같은 자리에 여러 명이 겹쳐 있으면 화면 중앙에 가장 가까운 한 명이 대상.
+- (4단계) 플레이어 외침에는 효과음·음성이 없고(TTS 를 켜면 읽음), 대사는 자막 중심이다. 대화 메뉴는 화면 맨 아래라 1인칭 총기와 일부 겹친다.
+- (4단계) 진짜 민간인이 대피로로 가는 중에 계속 겨누면 2단계 규칙대로 손을 들고 멈춘다(위장 민간인도 같음) — 대피를 시켰으면 총구를 돌려야 한다.
+- (4단계) 도주한 위장 적이 숨는 동안 플레이어가 계속 보고 있으면 숨는 시간이 줄지 않아 오래 웅크려 있을 수 있다.
+- (4단계) 실내 판정은 진입 가능 건물만 — 진입 불가 건물·폐허 안은 실외로 친다(실내 문답은 진입 가능 건물에서만).

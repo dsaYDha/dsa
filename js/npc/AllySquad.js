@@ -30,6 +30,7 @@ export class AllySquad {
     this.withdrawing = false;
     this.straggler = false; // 1인 낙오병 분대 (계획 없음)
     this.escortDecoyT = null; // 이 시간이 지나면 분대원 하나가 플레이어 동행으로 빠짐
+    this.unit = R.pick(CONFIG.dialogue.units); // 4단계: 소속 부대 (분대원 모두 같은 어깨 패치, "소속 대!"에 이 이름으로 답함)
   }
 
   /** 분대 계획에 따르는 분대원 (동행·합류 중인 인원 제외) */

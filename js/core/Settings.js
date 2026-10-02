@@ -34,6 +34,7 @@ export class Settings {
     if (Number.isNaN(this.volume)) this.volume = d.volume;
     this.lastSeed = typeof saved.lastSeed === 'string' ? saved.lastSeed : null;
     this.speech = typeof saved.speech === 'boolean' ? saved.speech : d.speech; // 무전·외침 음성(TTS)
+    this.countersignCard = typeof saved.countersignCard === 'boolean' ? saved.countersignCard : d.countersignCard; // 4단계 암구호 카드 표시
   }
 
   save() {
@@ -43,6 +44,7 @@ export class Settings {
       volume: this.volume,
       lastSeed: this.lastSeed,
       speech: this.speech,
+      countersignCard: this.countersignCard,
     });
   }
 }

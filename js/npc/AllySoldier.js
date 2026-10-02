@@ -5,11 +5,14 @@
 // 3단계: 겉보기 적(빨간 표식)만 공격 — 위장 적에게 속는다. 오판 유도용 진짜 행동:
 //   동행(escort, 플레이어 3~5m 뒤에서 엄호 — 실제로 적과 싸움), 낙오병(join, 다가와 합류), 무전 콜아웃에 반응(돌아봄)
 //   행동 기록은 위장 적과 같은 기준(npc/Behaviors.js)
+// 4단계: 소속 부대(unit, 어깨 패치와 일치). 말을 걸면 멈춰 서서 대답(talkHoldT — 교전 중이면 싸우면서 대답),
+//        "총 내려!"에 총구를 내림(lowerT — 그동안 쏘지 않음, 적과 교전하면 다시 듦). 대답 규칙은 dialogue/Responses.js
 import * as THREE from 'three';
 import { CONFIG } from '../config.js';
 import { Soldier } from './Soldier.js';
 import { gameRand as R } from '../core/Random.js';
 import { line } from '../dialogue/Callouts.js';
+import { allyOutfit } from './Outfits.js';
 import { moveToward, escortTarget, pickApproachNode, yawOfPlayerForward, trackApproach, trackSquad, trackFightFire } from './Behaviors.js';
 
 const S = { ENTER: 'enter', MOVE: 'move', COVER: 'cover', HOLD: 'hold', CLEAR: 'clear', ESCORT: 'escort', JOIN: 'join', DEAD: 'dead' };
@@ -23,7 +26,9 @@ const _rel2 = { t: 0, lat: 0, h: 0 };
 
 export class AllySoldier extends Soldier {
   constructor(game, opts) {
-    super(game, { ...opts, trueFaction: 'ally', apparentFaction: 'ally', kind: 'ally', maxHealth: CONFIG.ally.health });
+    const unit = opts.squad ? opts.squad.unit : R.pick(CONFIG.dialogue.units);
+    super(game, { ...opts, trueFaction: 'ally', apparentFaction: 'ally', kind: 'ally', maxHealth: CONFIG.ally.health, outfit: allyOutfit(unit) });
+    this.unit = unit; // 4단계: 소속 부대 (어깨 패치와 일치)
     const A = CONFIG.ally;
     this.tcfg = A;
     this.squad = opts.squad || null;
@@ -162,7 +167,7 @@ export class AllySoldier extends Soldier {
     this._setState(S.ESCORT);
     if (!this.escortSpoke) {
       this.escortSpoke = true;
-      this.game.voice.say({ speaker: '아군', text: line('allyEscort'), channel: 'shout', priority: 1, voice: this.voice });
+      this.game.voice.say({ speaker: this.talkLabel, text: line('allyEscort'), channel: 'shout', priority: 1, voice: this.voice });
     }
   }
 
@@ -227,14 +232,14 @@ export class AllySoldier extends Soldier {
     if (this.joinTarget) moveToward(this, dt, this.joinTarget.x, this.joinTarget.z, { walk: this.tcfg.walk * 1.2, run: this.tcfg.run * 0.9, runDist: 16, stopDist: 1.0, repath: 1.2, y: this.joinTarget.y });
     if (!this.joinCried && d < 22) {
       this.joinCried = true;
-      g.voice.say({ speaker: '아군', text: line('allyStraggler'), channel: 'shout', priority: 1, voice: this.voice });
+      g.voice.say({ speaker: this.talkLabel, text: line('allyStraggler'), channel: 'shout', priority: 1, voice: this.voice });
     }
     if (d < 8.5) this.startEscort(R.range(...CONFIG.disguise.decoy.escortTime));
   }
 
   _endEscort() {
     this.escortUntil = 0;
-    this.game.voice.say({ speaker: '아군', text: line('allyEscortEnd'), channel: 'shout', priority: 1, voice: this.voice });
+    this.game.voice.say({ speaker: this.talkLabel, text: line('allyEscortEnd'), channel: 'shout', priority: 1, voice: this.voice });
     this._setState(S.HOLD);
     const sq = this.squad;
     if (!sq) return;
@@ -257,7 +262,7 @@ export class AllySoldier extends Soldier {
     this.noteBehavior('radioAck');
     if (g.time - this.lastAckT > 10 && R.chance(0.3)) {
       this.lastAckT = g.time;
-      g.voice.say({ speaker: '아군', text: line('allyAck'), channel: 'shout', priority: 0, voice: this.voice });
+      g.voice.say({ speaker: this.talkLabel, text: line('allyAck'), channel: 'shout', priority: 0, voice: this.voice });
     }
   }
 
@@ -283,7 +288,16 @@ export class AllySoldier extends Soldier {
       trackFightFire(this, 0.5, this._engagedNow(), this.lastFireT);
     }
 
-    switch (this.state) {
+    // 4단계: 대화 중 — 멈춰 서서 플레이어를 바라봄 (적과 교전 중이면 싸우면서 대답)
+    const engaged = this._engagedNow();
+    if (this.lowerT > 0 && engaged) this.lowerT = 0;
+    const talking = this.talkHoldT > 0 && !engaged && this.state !== S.ENTER;
+    if (talking) {
+      this.curSpeed = 0;
+      this.faceTowards(this.game.player.feet.x, this.game.player.feet.z);
+      this.aimTarget = 0.3;
+      this.crouchTarget = Math.min(this.crouchTarget, 0.3);
+    } else switch (this.state) {
       case S.ENTER:
         if (this.stateT > 0.6) this._setState(S.HOLD);
         break;
@@ -310,9 +324,10 @@ export class AllySoldier extends Soldier {
       default:
         break;
     }
-    if (this.lookT > 0 && this.curSpeed < 0.5 && !this._engagedNow()) this.targetYaw = this.lookYaw;
-    this._aimAtTarget(this.curSpeed < 0.1);
-    this._sightLine(dt);
+    if (this.lookT > 0 && this.curSpeed < 0.5 && !engaged && !talking) this.targetYaw = this.lookYaw;
+    if (this.lowerT > 0) this.aimTarget = 0;
+    if (!talking) this._aimAtTarget(this.curSpeed < 0.1);
+    if (!talking && this.lowerT <= 0) this._sightLine(dt); // 말을 거는 중엔 조준선 위에 있는 게 당연하므로 비키지 않음
     this._shooting(dt);
     if (this.withdrawing) this._checkLeave(dt);
   }
@@ -358,6 +373,7 @@ export class AllySoldier extends Soldier {
 
   _canShoot() {
     if (!super._canShoot()) return false;
+    if (this.lowerT > 0) return false; // "총 내려!"에 따름
     if (this.curSpeed > 0.4) return false; // 이동 중엔 쏘지 않음
     if (this.duckT > 0) return false;
     if (this.state === S.COVER && this.coverPhase !== 'peek') return false;
@@ -522,7 +538,7 @@ export class AllySoldier extends Soldier {
     const att = info && info.attacker;
     if (att === 'player') {
       // 맞은 아군의 외침은 무전 차단과 무관하게 항상 들림 (오인 사격 피드백)
-      this.game.voice.say({ speaker: '아군', text: line('allyFriendlyFire'), channel: 'shout', priority: 3, force: true, voice: this.voice });
+      this.game.voice.say({ speaker: this.talkLabel, text: line('allyFriendlyFire'), channel: 'shout', priority: 3, force: true, voice: this.voice });
       this.game.camera.getWorldDirection(_f);
       if (this.isEscorting) {
         this._escortDodge();

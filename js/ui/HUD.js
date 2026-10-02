@@ -3,6 +3,8 @@
 // 2단계: 경고 횟수, 콤보 잠금, 오인 사격 피드백(가장자리 플래시·전용 마커·중앙 경고), 나침반(콜아웃 방위용), 무전 자막 영역
 // 3단계: 관찰 모드(가장자리 어둡게·관찰 게이지·관찰 메모 — 사실만, 결론 없음), 첫 위장 적·첫 관찰 안내,
 //        정체를 드러내는 위장 적 방향 경고, "위장 적 사살!" 피드백
+// 4단계: 대화 메뉴(화면 하단, 1~4 — 판정 표시 없음), 암구호 카드(현재 문어/답어·실내 기준수, 교체 직후 20초는 이전 것 취소선,
+//        교체 시 깜박임, 설정에서 숨김 가능), 첫 말 걸기·첫 실내 문답 안내, '대상 없음' 안내
 import * as THREE from 'three';
 import { CONFIG } from '../config.js';
 import { Events } from '../core/EventBus.js';
@@ -71,6 +73,13 @@ export class HUD {
       obsStatus: $('observe-status'),
       obsHint: $('observe-hint'),
       dkill: $('disguise-kill'),
+      dlgMenu: $('dialog-menu'),
+      dlgTarget: $('dialog-target'),
+      dlgOptions: $('dialog-options'),
+      dlgTimer: $('dialog-timer-bar'),
+      dlgHint: $('dialog-hint'),
+      csCard: $('cs-card'),
+      csBody: $('cs-body'),
     };
     // 나침반 눈금 (15도 간격, 8방위 라벨)
     this.compassMarks = [];
@@ -140,6 +149,15 @@ export class HUD {
       // 정체를 드러내는 위장 적: 시야 밖이면 방향 경고 (장전음과 함께)
       if (!e.npc.visibleToPlayer && e.npc.position.distanceTo(game.player.feet) < 18) this.addDamageDir(e.npc.position, 'warn');
     });
+    // 4단계
+    ev.on(Events.COUNTERSIGN_CHANGED, () => {
+      this._csKey = '';
+      this.csFlashT = 3.2;
+    });
+    ev.on(Events.DIALOGUE_OPEN, (e) => {
+      if (e.firstIndoor) this.showDialogHint('실내 확인 문답: 내가 외친 수 + 상대가 답한 수 = 실내 기준수면 맞는 답 (계산은 직접)');
+      else if (e.first) this.showDialogHint('1~4로 질문 · 대답이 맞는지는 직접 판단 · 쏘면 대화가 끝난다 · E 로 닫기');
+    });
     ev.on(Events.DISGUISE_KILLED, () => {
       const el = this.el.dkill;
       el.classList.remove('show');
@@ -147,6 +165,67 @@ export class HUD {
       el.classList.add('show');
       game.audio.disguiseKill();
     });
+  }
+
+  showDialogHint(text) {
+    const el = this.el.dlgHint;
+    el.textContent = text;
+    el.classList.add('show');
+    window.clearTimeout(this._dlgHintTimer);
+    this._dlgHintTimer = setTimeout(() => el.classList.remove('show'), CONFIG.dialogue.hintTime * 1000);
+  }
+
+  // 4단계 대화 메뉴: 대상(겉모습)·남은 시간·선택지 (판정은 보여주지 않음)
+  _updateDialogue() {
+    const g = this.game;
+    const d = g.dialogue;
+    const el = this.el;
+    // '대상 없음' 등 짧은 안내
+    if (d.notice && g.time - d.notice.t < 1.6) this.setHint(d.notice.text);
+    else if (d.notice) {
+      if (this._last.hint === d.notice.text) this.setHint('');
+      d.notice = null;
+    }
+    const t = d.target;
+    el.dlgMenu.classList.toggle('hidden', !t);
+    if (!t) {
+      this._dlgKey = '';
+      return;
+    }
+    const opts = d.options();
+    const dist = Math.round(t.position.distanceTo(g.player.feet));
+    const look = t.apparentFaction === 'civilian' ? (t.rig.outfit.elder ? '사복 차림 노인' : '사복 차림') : '파란 표식 병사';
+    const key = `${t.id}|${dist}|${opts.map((o) => `${o.disabled}${o.note}`).join(',')}|${d.busyT > 0}`;
+    if (key !== this._dlgKey) {
+      this._dlgKey = key;
+      el.dlgTarget.textContent = `${look} · ${dist}m${d.busyT > 0 ? ' · 응답 대기' : ''}`;
+      el.dlgOptions.innerHTML = opts
+        .map((o) => `<div class="opt${o.disabled ? ' off' : ''}"><kbd>${o.slot}</kbd>${esc(o.label)}${o.note ? `<span class="note">${o.note}</span>` : ''}</div>`)
+        .join('');
+    }
+    const frac = d.busyT > 0 ? 1 : Math.max(0, d.idleT / CONFIG.dialogue.menuTimeout);
+    el.dlgTimer.style.width = `${(frac * 100).toFixed(1)}%`;
+  }
+
+  // 4단계 암구호 카드
+  _updateCountersign(dt) {
+    const g = this.game;
+    const cs = g.countersign;
+    const el = this.el;
+    const show = !!g.settings.countersignCard && !!cs.current;
+    el.csCard.classList.toggle('hidden', !show);
+    this.csFlashT = Math.max(0, (this.csFlashT || 0) - dt);
+    el.csCard.classList.toggle('flash', this.csFlashT > 0);
+    if (!show) return;
+    const stale = cs.stale && cs.previous;
+    const key = `${cs.current.challenge}|${cs.indoorBase}|${stale}`;
+    if (key === this._csKey) return;
+    this._csKey = key;
+    const prev = stale ? `<div class="prev"><s>문어 ${esc(cs.previous.challenge)} · 답어 ${esc(cs.previous.reply)}</s></div>` : '';
+    const prevBase = stale && cs.prevIndoorBase != null ? ` <s>${cs.prevIndoorBase}</s>` : '';
+    el.csBody.innerHTML =
+      `<div class="row"><span class="k">암구호</span>문어 <b>${esc(cs.current.challenge)}</b> · 답어 <b>${esc(cs.current.reply)}</b></div>${prev}` +
+      `<div class="row"><span class="k">실내 기준수</span><b>${cs.indoorBase}</b>${prevBase}</div>`;
   }
 
   // 오인 사격 피드백: 가장자리 플래시 + 전용 마커 + 효과음 + 중앙 경고 문구
@@ -205,7 +284,12 @@ export class HUD {
     this.el.dkill.classList.remove('show');
     this.el.obsHint.classList.remove('show');
     this.el.obsMemo.classList.add('hidden');
+    this.el.dlgMenu.classList.add('hidden');
+    this.el.dlgHint.classList.remove('show');
     this.disguiseHinted = false;
+    this._csKey = '';
+    this._dlgKey = '';
+    this.csFlashT = 0;
     this._memoKey = '';
     this._last = {};
   }
@@ -322,6 +406,8 @@ export class HUD {
     const obs = game.observation;
     this.el.crosshair.style.opacity = (p.sprinting ? 0.15 : (1 - w.adsT * 0.85) * (1 - obs.t)).toFixed(2);
     this._updateObservation(obs);
+    this._updateDialogue();
+    this._updateCountersign(dt);
 
     this.hitT = Math.max(0, this.hitT - dt);
     this.killT = Math.max(0, this.killT - dt);

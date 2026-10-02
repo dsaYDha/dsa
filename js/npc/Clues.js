@@ -1,8 +1,12 @@
 // 3단계 단서 카탈로그 — 관찰 모드가 알아채는 '사실'과 위장 적의 장비 단서
 // · 장비 단서(gear) = 확정 증거: 진짜 아군·민간인에게는 절대 나타나지 않음. 작고 가까이서만 보임 (거리·조명 필요)
 // · 행동 단서(behavior) = 의심 근거: NPC 마다 실제로 일어난 일만 기록(npc.behavior)되고, 진짜 인물도 가끔 비슷하게 행동함
-// 사실(fact)은 { key, text, anomalous, kind: 'gear'|'behavior' } — 관찰 메모에는 결론("적입니다")을 절대 쓰지 않는다
+// 사실(fact)은 { key, text, anomalous, kind: 'gear'|'behavior', view } — 관찰 메모에는 결론("적입니다")을 절대 쓰지 않는다
+// view: 장비가 보이는 방향 'any' | 'front'(앞에서) | 'back'(뒤·옆에서) | 'side'(옆·비스듬히 — 어깨 패치) — 관찰 모드가 보는 각도로 거름
+// 4단계: 아군 패치는 부대마다 모양이 다름(config.dialogue.units), 말 걸기에 대한 행동(멈춤·못 들은 척·도주·머뭇거림·거부·신분증·대피)도 기록
+//        단, 대답의 '내용'(암구호·숫자가 맞는지)은 기록하지 않는다 — 판정은 플레이어 몫
 import { gameRand as R } from '../core/Random.js';
+import { unitByPatch } from '../dialogue/Countersign.js';
 
 // 위장 적 장비 단서 — 겉보기 소속별. apply(outfit) 로 복장에 덧입힌다 (tapeBand 는 표식 컴포넌트에서 처리)
 export const GEAR_CLUES = {
@@ -40,6 +44,20 @@ export const BEHAVIOR = {
   handsUpQuick: { text: '조준하자 바로 손을 듦' },
   lateHands: { text: '조준하자 한참 뒤에야 손을 듦', anomalous: true },
   noHands: { text: '조준해도 손을 들지 않음', anomalous: true },
+  // 4단계: 말 걸기에 대한 행동
+  stoppedOnHalt: { text: '"정지!"에 멈춰 섬' },
+  ignoredHalt: { text: '"정지!"를 못 들은 척 계속 걸어감', anomalous: true },
+  fledTalk: { text: '말을 걸자 달아남', anomalous: true, variants: { halt: '"정지!"에 달아남', question: '질문을 받자 달아남' } },
+  hesitated: { text: '질문에 머뭇거림', anomalous: true },
+  refused: { text: '지시를 거부함', anomalous: true },
+  loweredWeapon: { text: '지시에 총구를 내림' },
+  showedEmptyHands: { text: '빈손을 들어 보임' },
+  oneHandLate: { text: '"손 들어!"에 한 손을 늦게 듦', anomalous: true },
+  showedId: { text: '신분증을 보여 줌' },
+  noId: { text: '신분증이 없다고 함', anomalous: true },
+  evacOk: { text: '대피하라는 말에 대피로로 감' },
+  fakeEvac: { text: '대피하라는 말에 가다가 멈춤', anomalous: true, variants: { stop: '대피하라는 말에 가다가 멈춤', return: '대피하라는 말에 가다가 되돌아옴' } },
+  annoyed: { text: '거듭 묻자 짜증을 냄' },
   towardPlayer: { text: '대피하지 않고 이쪽으로 다가옴', anomalous: true },
   helpCry: { text: '도와달라고 외침' },
   fled: { text: '대피로 쪽으로 달아남' },
@@ -51,10 +69,12 @@ export const BEHAVIOR = {
 const SHOES = { sneakers: '운동화', dress: '구두', work: '작업화' };
 const TOPS = { shirt: '셔츠', jacket: '재킷', coat: '코트', sweater: '스웨터' };
 
-// glow: 빛나는 표식처럼 어두운 곳에서도 보이는 장비
-function fact(key, text, anomalous = false, glow = false) {
-  return { key: `gear:${key}`, text, anomalous: !!anomalous, kind: 'gear', glow };
+// glow: 빛나는 표식처럼 어두운 곳에서도 보이는 장비 / view: 보이는 방향
+function fact(key, text, anomalous = false, glow = false, view = 'any') {
+  return { key: `gear:${key}`, text, anomalous: !!anomalous, kind: 'gear', glow, view };
 }
+
+const ODD_PATCH = { square: '올리브색 네모', round: '누런 동그라미' };
 
 // 지금 몸에 실제로 있는 장비로 만든 사실 (겉보기 소속 기준으로 이상 여부 판정)
 export function gearFacts(npc) {
@@ -71,9 +91,10 @@ export function gearFacts(npc) {
       out.push(o.helmetStyle === 'ally' ? fact('helmet', '낮고 넓은 헬멧 (뒷목 가리개)') : fact('helmet', '챙 있는 둥근 헬멧', asAlly));
     }
     if (o.rifle) out.push(o.rifleStyle === 'straight' ? fact('rifle', '직선 탄창 소총') : fact('rifle', '굽은 탄창 소총', asAlly));
-    if (o.patch === 'shield') out.push(fact('patch', '어깨 부대 패치: 파란 방패'));
-    else if (o.patch) out.push(fact('patch', `어깨 패치 모양이 다름 (${o.patch === 'square' ? '네모' : '동그라미'})`, asAlly));
-    else if (asAlly || o.vest != null) out.push(fact('patch', '어깨 부대 패치 없음', asAlly));
+    const unit = unitByPatch(o.patch);
+    if (unit) out.push(fact('patch', `어깨 부대 패치: ${unit.patchName}`, false, false, 'side'));
+    else if (o.patch) out.push(fact('patch', `어깨 패치: ${ODD_PATCH[o.patch] || '처음 보는 모양'}`, asAlly, false, 'side'));
+    else if (asAlly || o.vest != null) out.push(fact('patch', '어깨 부대 패치 없음', asAlly, false, 'side'));
     out.push(fact('shoes', o.footwear === 'combat' ? '군화' : SHOES[o.footwear] || '신발'));
     return out;
   }
@@ -83,9 +104,10 @@ export function gearFacts(npc) {
   out.push(o.tacticalGloves ? fact('gloves', '전술 장갑 착용', true) : fact('gloves', '맨손'));
   if (o.bag === 'carry') out.push(fact('bag', '짐 가방을 들고 있음'));
   else if (o.bag === 'backpack') out.push(fact('bag', '배낭을 멤'));
-  if (o.waistBulge) out.push(fact('bulge', '허리춤이 불룩함', true));
-  if (o.backRifle) out.push(fact('backRifle', '등 뒤로 길쭉한 총몸 윤곽이 비침', true));
-  if (o.radio) out.push(fact('radio', '가슴에 무전기를 달고 있음', true));
+  // 손을 들어 옷이 올라가면 허리춤 무기가 더 잘 보인다 (4단계 "손 들어!")
+  if (o.waistBulge) out.push(o.shirtLift ? fact('bulge', '손을 들자 허리춤에 권총 손잡이가 드러남', true, false, 'any') : fact('bulge', '허리춤이 불룩함', true, false, 'front'));
+  if (o.backRifle) out.push(fact('backRifle', '등 뒤로 길쭉한 총몸 윤곽이 비침', true, false, 'back'));
+  if (o.radio) out.push(fact('radio', '가슴에 무전기를 달고 있음', true, false, 'front'));
   if (o.vestStraps) out.push(fact('straps', '옷 위로 조끼 끈이 보임', true));
   return out;
 }

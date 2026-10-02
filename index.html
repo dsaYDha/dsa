@@ -45,10 +45,20 @@
       </div>
       <div id="observe-hint"></div>
 
+      <!-- 4단계: 대화 메뉴 (판정 표시 없음 — 대답이 맞는지는 직접 판단) -->
+      <div id="dialog-menu" class="hidden">
+        <div class="hd"><span class="lbl">말 걸기</span> <span id="dialog-target"></span></div>
+        <div id="dialog-options"></div>
+        <div class="timer"><i id="dialog-timer-bar"></i></div>
+      </div>
+      <div id="dialog-hint"></div>
+
       <div id="hud-top-left">
         <div id="hud-threat">위협 단계 1</div>
         <div id="hud-threat-pips"></div>
         <div id="hud-warnings"><span class="lbl">경고</span><span id="hud-warn-pips"></span><span id="hud-warn-text">0/3</span></div>
+        <!-- 4단계: 암구호 카드 (설정에서 숨기면 외워서 플레이) -->
+        <div id="cs-card" class="hidden"><div class="hd">암구호 카드</div><div id="cs-body"></div></div>
       </div>
       <div id="hud-top-center">
         <div id="hud-time">00:00</div>
@@ -102,9 +112,13 @@
           <div class="hd">작전 브리핑</div>
           <ul>
             <li>적이 <span class="blue">아군</span>·<b>민간인</b>으로 위장해 섞여 든다. 표식과 옷만 믿지 마라.</li>
-            <li>진짜 아군 장비: <b>낮고 넓은 헬멧</b> · <b>직선 탄창 소총</b> · 어깨의 <b>파란 방패 패치</b></li>
+            <li>진짜 아군 장비: <b>낮고 넓은 헬멧</b> · <b>직선 탄창 소총</b> · 어깨의 <b>파란 부대 패치</b></li>
+            <li>아군 부대: <b>철방패대대</b>(파란 방패) · <b>샛별중대</b>(파란 별) · <b>봉우리대대</b>(파란 삼각형) — "소속 대!"에 이 이름으로, 패치와 맞게 답한다</li>
             <li>진짜 민간인: 비무장 · 민간 신발 · 손이 보임 · 총성에 웅크림</li>
             <li>수상하면 <kbd>Q</kbd> 누르고 있기 = <b>관찰</b>. 총을 내리고 집중해 사실을 하나씩 알아챈다 — 그동안은 쏠 수 없다.</li>
+            <li><kbd>E</kbd> = <b>말 걸기</b> ("정지!") → <kbd>1</kbd>~<kbd>4</kbd> 로 질문. 총은 든 채로, 쏘면 대화가 끝난다. 게임은 멈추지 않는다.</li>
+            <li><b>암구호</b>: 문어를 외치면 아군은 답어로 답한다 (약 1분마다 작전 무전으로 교체 — 교체 직후엔 진짜 아군도 헷갈려 정정하기도 한다).</li>
+            <li><b>실내 확인 문답</b>(같은 건물 안에서만): 내가 외친 수 + 상대의 답 = <b>실내 기준수</b>. 예) 기준수 9, "셋!" → "여섯!". 아군끼리만 아는 수 — 가장 확실하다.</li>
           </ul>
         </div>
         <div class="controls">
@@ -118,6 +132,8 @@
           <div><kbd>R</kbd> 재장전</div>
           <div><kbd>F</kbd> 손전등</div>
           <div><kbd>Q</kbd> 관찰 (누르고 있기)</div>
+          <div><kbd>E</kbd> 말 걸기 / 닫기</div>
+          <div><kbd>1</kbd>~<kbd>4</kbd> 질문 선택</div>
           <div><kbd>Esc</kbd> 일시정지</div>
           <div><kbd>`</kbd> 디버그</div>
         </div>
@@ -142,6 +158,7 @@
           <label>시야각 (FOV) <span id="set-fov-val"></span><input id="set-fov" type="range" /></label>
           <label>볼륨 <span id="set-vol-val"></span><input id="set-vol" type="range" /></label>
           <label class="check"><input id="set-speech" type="checkbox" /> 무전·외침 음성 읽기 (TTS) <span id="set-speech-note"></span></label>
+          <label class="check"><input id="set-cscard" type="checkbox" /> 암구호 카드 항상 표시 <span class="note">(끄면 무전을 외워서 플레이 — 어려움)</span></label>
         </div>
         <div class="buttons">
           <button id="btn-resume" class="primary" type="button">계속하기</button>

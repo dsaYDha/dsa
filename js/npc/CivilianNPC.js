@@ -5,6 +5,8 @@
 // 3단계 오판 유도용 진짜 행동(decoy): 'frozen' 충격으로 얼어붙어 웅크리지 못함 / 'helpSeeker' "도와주세요!" 하며 플레이어에게 다가옴
 //   행동 기록(웅크림·손 들기·다가옴·대피)은 위장 적과 같은 기준(npc/Behaviors.js)
 // 대피 지점에 닿아도 플레이어 눈앞에서는 사라지지 않고, 시야 밖이 되면 퇴장
+// 4단계: 말을 걸면 멈춰 서서 바라봄(talkHoldT), "손 들어!"에 즉시 빈손을 들어 보임(cmdHandsT — 옷이 올라가 허리띠가 보임),
+//        "신분증 보여주세요"에 신분증을 내밂(cardT), "대피하세요"에 대피로로 감. 대답 규칙은 dialogue/Responses.js
 import * as THREE from 'three';
 import { CONFIG } from '../config.js';
 import { Events } from '../core/EventBus.js';
@@ -59,6 +61,7 @@ export class CivilianNPC extends NPCBase {
     this.trackT = R.range(0, 0.5);
     this.leaveT = 0;
     this._handsWas = false;
+    this.cmdHandsT = 0; // 4단계: "손 들어!"로 든 손 유지
   }
 
   get stateLabel() {
@@ -141,6 +144,22 @@ export class CivilianNPC extends NPCBase {
     }
   }
 
+  // 4단계: "손 들어!" — 즉시 빈손을 들어 보임
+  commandHands(sec) {
+    this.cmdHandsT = Math.max(this.cmdHandsT, sec);
+    this.handsUp = Math.max(this.handsUp, 0.3);
+    this.noteBehavior('showedEmptyHands');
+  }
+
+  // 4단계: "이쪽으로 대피하세요" — 대피로로 이동
+  dlgEvacuate() {
+    this.talkHoldT = 0;
+    this.seekLeft = 0;
+    this.frozenLeft = 0;
+    if (this.state !== S.LEAVE) this._startFlee(false);
+    this.noteBehavior('evacOk');
+  }
+
   // 근처 민간인 사망 → 공황 (흩어져 뛰기)
   startPanic() {
     if (!this.alive || this.panic) return;
@@ -166,7 +185,8 @@ export class CivilianNPC extends NPCBase {
     // 조준당하면 손 들기 (이동 정지)
     this.notAimedT += dt;
     if (this.notAimedT > 0.3) this.aimedT = Math.max(0, this.aimedT - dt * 2);
-    const wantHands = this.aimedT > C.aimReactTime || (this.handsUp > 0.5 && this.notAimedT < C.handsUpRelease);
+    this.cmdHandsT = Math.max(0, this.cmdHandsT - dt);
+    const wantHands = this.cmdHandsT > 0 || this.aimedT > C.aimReactTime || (this.handsUp > 0.5 && this.notAimedT < C.handsUpRelease);
     if (wantHands && !this._handsWas) this.noteBehavior('handsUpQuick'); // 진짜 민간인은 겨누면 곧바로 손을 든다
     this._handsWas = wantHands;
     this.handsUp += ((wantHands ? 1 : 0) - this.handsUp) * Math.min(1, dt * 8);
@@ -183,6 +203,15 @@ export class CivilianNPC extends NPCBase {
       this.cower = Math.max(0, this.cower - dt * 4);
       this.faceTowards(game.player.feet.x, game.player.feet.z);
       if (this.crouchTarget > 0.6) this.crouchTarget = 0.4;
+      return;
+    }
+
+    // 4단계: 대화 중 — 멈춰 서서 플레이어를 바라봄 (공황·대피 지점 도착 제외)
+    if (this.talkHoldT > 0 && !this.panic && this.state !== S.LEAVE && this.state !== S.ENTER) {
+      this.curSpeed = 0;
+      this.faceTowards(game.player.feet.x, game.player.feet.z);
+      if (this.state !== S.COWER) this.crouchTarget = Math.min(this.crouchTarget, 0.35);
+      this.cower += ((this.state === S.COWER ? 1 : 0) - this.cower) * Math.min(1, dt * 6);
       return;
     }
 

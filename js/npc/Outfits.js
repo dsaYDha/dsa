@@ -1,5 +1,5 @@
 // 복장 조합 — 진영별 장비 세트와 민간인 사복 무작위 조합
-// 진짜 아군·적은 항상 config.gearSets 의 자기 진영 세트를 갖추고 (진짜 아군 = 낮은 헬멧·직선 탄창·어깨 파란 방패 패치),
+// 진짜 아군·적은 항상 config.gearSets 의 자기 진영 세트를 갖추고 (진짜 아군 = 낮은 헬멧·직선 탄창·어깨에 자기 부대의 파란 패치),
 // 진짜 민간인은 항상 비무장·민간 신발·맨손(손이 보이는 상태)을 유지한다. (3단계 위장 판별 기준)
 // 위장 적의 복장은 npc/Disguise.js 가 이 함수들로 만든 뒤 장비 단서(npc/Clues.js GEAR_CLUES)를 덧입힌다.
 import { CONFIG } from '../config.js';
@@ -11,6 +11,13 @@ export function soldierOutfit(faction) {
   const o = defaultOutfit(CONFIG.factions[faction]);
   const gear = CONFIG.gearSets[faction];
   if (gear) Object.assign(o, gear);
+  return o;
+}
+
+// 4단계: 아군 복장 + 부대 패치 (부대마다 패치 모양이 다름 — config.dialogue.units)
+export function allyOutfit(unit) {
+  const o = soldierOutfit('ally');
+  if (unit) o.patch = unit.patch;
   return o;
 }
 
@@ -66,7 +73,7 @@ export function describeEquipment(npc) {
   const o = npc.rig.outfit;
   const armed = !!o.rifle;
   return {
-    patch: o.patch || null, // 'shield'(진짜 아군) | 'square' | 'round' | null
+    patch: o.patch || null, // 'shield'|'star'|'triangle'(아군 부대 패치) | 'square' | 'round' | null
     concealed: { waistBulge: !!o.waistBulge, backRifle: !!o.backRifle },
     radio: !!o.radio,
     vestStraps: !!o.vestStraps,

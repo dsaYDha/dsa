@@ -1,5 +1,6 @@
 // 디버그 오버레이 (백틱 ` 키, 기본 꺼짐) — FPS, 종류별 활성 NPC 수, 스폰 디렉터 상태·출현 비율, 페널티, NPC 머리 위 trueFaction 표시
 // 3단계: 위장 적 수·상한·누계, 오판 유도 행동 누계, 머리 위 위장 정보(유형·숙련도·남은 단서·기습 조건 진행)
+// 4단계: 암구호·실내 기준수 상태, 대화 대상(없으면 조준 대상)이 아는 정보 (현재/이전 암구호·실내 기준수·부대명), 문답 통계
 import * as THREE from 'three';
 import { CONFIG } from '../config.js';
 import { PhaseLabel } from '../director/SpawnDirector.js';
@@ -98,8 +99,28 @@ export class DebugOverlay {
       `<b>최근 출현</b> ${last || '-'}`,
       `<b>플레이어</b> (${p.position.x.toFixed(1)}, ${(p.position.y - CONFIG.player.radius).toFixed(1)}, ${p.position.z.toFixed(1)}) ${indoor ? `실내 B${indoor.building.id} ${indoor.floor + 1}층` : '실외'}`,
       `<b>조준 NPC</b> ${aimed ? `#${aimed.npc.id} ${aimed.npc.trueFaction} ${aimed.distance.toFixed(1)}m` : '-'}`,
+      this._dialogueLine(aimed ? aimed.npc : null),
       `<b>맵</b> 시드 ${g.world.seed} · 생성 ${g.world.genMs.toFixed(0)}ms · 충돌삼각형 ${g.world.collision.triCount} · 내비 ${g.world.nav.activeCount}`,
     ].join('<br>');
+  }
+
+  // 4단계: 암구호 상태 + 대화 대상이 아는 정보
+  _dialogueLine(aimedNpc) {
+    const g = this.game;
+    const cs = g.countersign;
+    const d = g.dialogue;
+    if (!cs || !cs.current) return '<b>암구호</b> -';
+    const yn = (v) => (v ? 'O' : 'X');
+    const t = d.target || aimedNpc;
+    let know = '';
+    if (t && t.apparentFaction !== 'enemy') {
+      const k = cs.knowledgeOf(t);
+      const sk = t.disguise ? ` 위장 숙련${t.disguise.skill}` : '';
+      know = ` · <b>${d.target ? '대화' : '조준'} #${t.id}</b>(${t.trueFaction}${sk}) 아는 것: 현재 ${yn(k.current)} · 이전 ${yn(k.previous)} · 기준수 ${yn(k.indoor)} · 부대 ${k.unit || '-'}${t.dialogueFailed ? ' · 문답 실패' : ''}`;
+    }
+    const st = d.stats;
+    return `<b>암구호</b> ${cs.current.challenge}/${cs.current.reply} (이전 ${cs.previous ? cs.previous.challenge + '/' + cs.previous.reply : '-'}) · 기준수 ${cs.indoorBase} · 교체 ${cs.rotations}회${know}` +
+      `<br><b>문답</b> 말 걸기 ${st.talks} · 질문 ${st.questions} · 찾아낸 위장 ${st.exposed} · 진짜 확인 ${st.confirmed} · 문답 중 기습 ${st.ambushed}${d.target ? ` · 열림(${d.reaction}, 대기 ${Math.max(0, d.busyT).toFixed(1)}s / 남음 ${Math.max(0, d.idleT).toFixed(1)}s)` : ''}`;
   }
 
   _renderLabels() {

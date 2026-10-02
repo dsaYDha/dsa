@@ -75,7 +75,8 @@ export function defaultOutfit(faction) {
     bag: null, // null | 'backpack' | 'shoulder' | 'carry'
     bagColor: 0x3a3028,
     elder: false,
-    patch: null, // 어깨 부대 패치: 'shield'(진짜 아군, 파란 방패) | 'square' | 'round' | null
+    patch: null, // 어깨 부대 패치: 'shield'|'star'|'triangle'(진짜 아군 부대, 파란색 — config.dialogue.units) | 'square' | 'round' | null
+    shirtLift: false, // 4단계: 손을 들어 옷이 올라감 (허리띠·허리춤 무기가 드러남)
     waistBulge: false, // 허리춤 불룩함 (옷 속 무기)
     backRifle: false, // 등 뒤로 비치는 총몸 윤곽
     radio: false, // 가슴의 무전기
@@ -84,16 +85,28 @@ export function defaultOutfit(faction) {
 }
 
 // 어깨 부대 패치 (팔 바깥면, 완장 아래) — side: +1 왼팔(+x), -1 오른팔(-x)
-// 작고 평평해서 가까이서만 보인다. 진짜 아군은 항상 파란 방패(테두리 밝은 색)
+// 작고 평평해서 가까이서만 보인다. 진짜 아군은 항상 자기 부대의 파란 패치(방패·별·삼각형, 테두리 밝은 색)
 const PATCH_STYLE = {
   shield: { main: 0x2858c8, rim: 0xd9cfa8 },
+  star: { main: 0x2858c8, rim: 0xd9cfa8 },
+  triangle: { main: 0x2858c8, rim: 0xd9cfa8 },
   square: { main: 0x4a5a32, rim: 0x1c1c1a },
   round: { main: 0x8a7a3a, rim: 0x1c1c1a },
 };
 function patchShape(kind, scale) {
   if (kind === 'round') return new THREE.CircleGeometry(0.031 * scale, 10);
   const sh = new THREE.Shape();
-  if (kind === 'square') {
+  if (kind === 'star') {
+    for (let i = 0; i < 10; i++) {
+      const r = (i % 2 ? 0.016 : 0.038) * scale;
+      const a = Math.PI / 2 + (i * Math.PI) / 5;
+      if (i === 0) sh.moveTo(Math.cos(a) * r, Math.sin(a) * r);
+      else sh.lineTo(Math.cos(a) * r, Math.sin(a) * r);
+    }
+    sh.closePath();
+  } else if (kind === 'triangle') {
+    sh.moveTo(0, 0.038 * scale); sh.lineTo(0.035 * scale, -0.024 * scale); sh.lineTo(-0.035 * scale, -0.024 * scale); sh.closePath();
+  } else if (kind === 'square') {
     const h = 0.029 * scale;
     sh.moveTo(-h, h); sh.lineTo(h, h); sh.lineTo(h, -h); sh.lineTo(-h, -h); sh.closePath();
   } else {
@@ -126,6 +139,43 @@ function shade(color, k) {
 
 const geoCache = new Map();
 const skinCache = new Map();
+
+// 4단계: 신분증 소품 (보여줄 때만 오른손에 붙는 작은 판, 모든 인물이 같은 모양 — 위조 신분증도 겉보기는 같다)
+let CARD = null;
+function cardAssets() {
+  if (CARD) return CARD;
+  const cv = document.createElement('canvas');
+  cv.width = 128;
+  cv.height = 82;
+  const x = cv.getContext('2d');
+  x.fillStyle = '#e6e1d2';
+  x.fillRect(0, 0, 128, 82);
+  x.fillStyle = '#3b5a86';
+  x.fillRect(0, 0, 128, 16);
+  x.fillStyle = '#f2efe6';
+  x.font = 'bold 11px sans-serif';
+  x.fillText('주 민 등 록 증', 30, 12);
+  x.fillStyle = '#8c7a68';
+  x.fillRect(8, 22, 32, 42);
+  x.fillStyle = '#5a4a3e';
+  x.beginPath();
+  x.arc(24, 36, 8, 0, Math.PI * 2);
+  x.fill();
+  x.fillRect(13, 46, 22, 18);
+  x.fillStyle = '#6f6a60';
+  for (let i = 0; i < 4; i++) x.fillRect(48, 26 + i * 10, 64 - i * 8, 4);
+  x.strokeStyle = '#c0392b';
+  x.lineWidth = 2;
+  x.beginPath();
+  x.arc(108, 66, 8, 0, Math.PI * 2);
+  x.stroke();
+  const tex = new THREE.CanvasTexture(cv);
+  tex.colorSpace = THREE.SRGBColorSpace;
+  const geo = new THREE.PlaneGeometry(0.115, 0.074); // 실물(8.6×5.4cm)보다 조금 크게 — 몇 m 떨어져서도 보이게
+  geo.rotateX(Math.PI / 2); // 팔을 앞으로 들면 앞쪽(보는 사람)을 향함
+  CARD = { geo, mat: new THREE.MeshLambertMaterial({ map: tex, side: THREE.DoubleSide }) };
+  return CARD;
+}
 
 function headGeometry(o) {
   const head = [box(0.19, 0.22, 0.21, o.skin, 0, 0.12, 0), box(0.16, 0.03, 0.02, 0x2a1e18, 0, 0.15, 0.106)];
@@ -241,6 +291,15 @@ function buildGeometries(o) {
       torso.push(box(0.04, 0.46, 0.014, sc, sx, 0.3, 0.115), box(0.04, 0.46, 0.014, sc, sx, 0.3, -0.115), box(0.04, 0.014, 0.23, sc, sx, 0.528, 0));
     }
     torso.push(box(0.26, 0.03, 0.014, sc, 0, 0.36, 0.117));
+  }
+  // 4단계: 손을 들어 옷이 올라가면 허리띠가 드러나고, 허리춤에 숨긴 무기가 있으면 권총 손잡이·권총집이 보인다
+  if (o.shirtLift && o.top !== 'uniform') {
+    torso.push(box(0.392, 0.04, 0.232, 0x2a2018, 0, 0.03, 0));
+    torso.push(box(0.05, 0.035, 0.012, 0x8a7a5a, 0, 0.03, 0.117)); // 버클
+    if (o.waistBulge) {
+      torso.push(box(0.07, 0.11, 0.06, 0x2a2622, -0.11, 0.035, 0.15)); // 권총집
+      torso.push(box(0.038, 0.1, 0.045, 0x141414, -0.11, 0.12, 0.165, -0.25, 0, 0)); // 손잡이
+    }
   }
   G.torso = merge(torso);
   G.head = headGeometry(o);
@@ -415,6 +474,18 @@ export class HumanoidRig {
     this.material.userData.uInterior.value = v;
   }
 
+  // 4단계: 신분증을 손에 듦 (처음 쓸 때 만들어 오른 팔뚝 뼈에 붙임 — 보일 때만 드로우콜 1)
+  setCard(visible) {
+    if (visible && !this.card) {
+      const c = cardAssets();
+      this.card = new THREE.Mesh(c.geo, c.mat);
+      this.card.position.set(0, -0.36, 0.01);
+      this.card.rotation.y = 0.15;
+      this.elbowR.add(this.card);
+    }
+    if (this.card) this.card.visible = visible;
+  }
+
   // 관찰 모드 노란 윤곽 (0 이면 끔)
   setHighlight(intensity) {
     const u = this.material.userData.uHighlight;
@@ -449,7 +520,8 @@ export class HumanoidRig {
 
   /**
    * p: { speed, aim(0~1), aimPitch(rad), crouch(0~1), handsUp(0~1), cower(0~1),
-   *      hideHands(0~1), handsMode('back'|'pocket'), shock(0~1), tear(0~1), reach(0~1), radioTalk(0~1) }
+   *      hideHands(0~1), handsMode('back'|'pocket'), shock(0~1), tear(0~1), reach(0~1), radioTalk(0~1),
+   *      handsLag(0~1: 오른손만 늦게 듦), lowered(0~1: 총구를 내림), showCard(0~1: 신분증을 내밂) }
    * 무장 여부는 복장(outfit.rifle), 노인 자세는 outfit.elder 로 결정
    */
   animate(dt, p) {
@@ -534,10 +606,22 @@ export class HumanoidRig {
       lX = -sw; lY = 0; lZ = 0.08; lE = -(0.15 + run * 1.0);
       if (this.outfit.bag === 'carry') { rX = sw * 0.2; rZ = -0.16; rE = -0.05; }
     }
-    // 손 들기 (항복·"쏘지 마세요")
+    // 4단계: 총구를 내림 ("총 내려!") — 소총을 몸 앞 아래로 늘어뜨림
+    const lowered = armed ? (p.lowered || 0) : 0;
+    if (lowered > 0) {
+      rX = lerp(rX, -0.2, lowered); rY = lerp(rY, 0.25, lowered); rE = lerp(rE, -0.55, lowered);
+      lX = lerp(lX, -0.35, lowered); lY = lerp(lY, -0.35, lowered); lE = lerp(lE, -0.75, lowered);
+    }
+    // 손 들기 (항복·"쏘지 마세요") — handsLag: 오른손만 늦게 올라옴 (4단계 위장 적 단서)
     if (handsUp > 0) {
-      rX = lerp(rX, -2.75, handsUp); rY = lerp(rY, 0, handsUp); rZ = lerp(rZ, -0.35, handsUp); rE = lerp(rE, -0.45, handsUp);
+      const hr = handsUp * (1 - (p.handsLag || 0));
+      rX = lerp(rX, -2.75, hr); rY = lerp(rY, 0, hr); rZ = lerp(rZ, -0.35, hr); rE = lerp(rE, -0.45, hr);
       lX = lerp(lX, -2.75, handsUp); lY = lerp(lY, 0, handsUp); lZ = lerp(lZ, 0.35, handsUp); lE = lerp(lE, -0.45, handsUp);
+    }
+    // 4단계: 신분증을 앞으로 내밂
+    const card = (p.showCard || 0) * (1 - handsUp);
+    if (card > 0) {
+      rX = lerp(rX, -1.3, card); rY = lerp(rY, 0.2, card); rZ = lerp(rZ, -0.05, card); rE = lerp(rE, -0.5, card);
     }
     // 머리 감싸고 웅크리기
     if (cower > 0) {
@@ -582,8 +666,8 @@ export class HumanoidRig {
     this.elbowR.rotation.set(rE, 0, 0);
     this.shoulderL.rotation.set(lX, lY, lZ);
     this.elbowL.rotation.set(lE, 0, 0);
-    this.rifleMount.position.set(lerp(-0.02, -0.1, aim), lerp(0.22, 0.42, aim), lerp(0.24, 0.24, aim) - this.kick * 0.05);
-    this.rifleMount.rotation.set(lerp(0.55, 0, aim) - this.kick * 0.12, lerp(0.25, 0, aim), lerp(0.5, 0, aim));
+    this.rifleMount.position.set(lerp(lerp(-0.02, -0.1, aim), -0.04, lowered), lerp(lerp(0.22, 0.42, aim), 0.1, lowered), lerp(0.24, 0.26, lowered) - this.kick * 0.05);
+    this.rifleMount.rotation.set(lerp(lerp(0.55, 0, aim) - this.kick * 0.12, 1.2, lowered), lerp(lerp(0.25, 0, aim), 0.08, lowered), lerp(lerp(0.5, 0, aim), 0.12, lowered));
   }
 
   dispose() {

@@ -12,11 +12,16 @@
 //   → 정체를 드러냄(apparentFaction = enemy, 근거리 고명중) → 일반 적 상태 머신
 // 정찰형: 창가·골목에서 플레이어를 지켜보다가 무전으로 근처에 습격을 부르고, 습격과 함께 정체를 드러낸다.
 // 드러내기 전: 적은 공격하지 않고(진짜 소속이 적), 아군·민간인은 겉모습에 속는다(looksHostile = false).
+// 4단계 말 걸기: '정지!'에 멈춤/못 들은 척/도주(talkHalt), 문답 압박(onQuestioned — 붙어 있은 시간이 빨리 참),
+//   '들킨 것 같으면'(suspect) 기습 조건이 빨라지거나 도주(flee → 숨었다가 다시 접근하거나 습격을 부름),
+//   "총 내려!"에 따르는 척(시선을 돌리면 기습이 빨리 참), "손 들어!"(늦게·한 손 늦게), 가짜 대피(fakeEvac).
+//   문답에서 막혀 즉시 드러내는 경우는 reason 'questioned' (예고 동작 유지). 대답 규칙 자체는 dialogue/Responses.js
 import * as THREE from 'three';
 import { CONFIG } from '../config.js';
 import { Events } from '../core/EventBus.js';
 import { gameRand as R } from '../core/Random.js';
-import { soldierOutfit, civilianOutfit } from './Outfits.js';
+import { allyOutfit, civilianOutfit } from './Outfits.js';
+import { FAKE_UNITS_PLAUSIBLE, FAKE_UNITS_ODD } from '../dialogue/DialogueLines.js';
 import { GEAR_CLUES } from './Clues.js';
 import {
   moveToward, escortTarget, pickApproachNode, yawToPlayer, yawOfPlayerForward,
@@ -48,7 +53,9 @@ export function lerpRangeD(pairs, threat) {
 export function rollDisguiseProfile(as, threat, opts = {}) {
   const D = CONFIG.disguise;
   const [lo, hi] = lerpRangeD(D.gearClues, threat);
-  const count = R.int(Math.round(lo), Math.round(hi));
+  let count = R.int(Math.round(lo), Math.round(hi));
+  // 테스트·디버그: 숙련도를 지정하면 그에 맞는 장비 단서 수
+  if (opts.skill != null) count = opts.skill >= 2 ? 0 : opts.skill === 1 ? 1 : R.int(2, 3);
   const role = opts.role || (R.chance(D.scoutChance[as]) ? 'scout' : 'ambusher');
   const pool = as === 'ally' ? ['curvedRifle', 'enemyHelmet', 'patch', 'tapeBand'] : ['combatBoots', 'waistBulge', 'backRifle', 'radio', 'vestStraps', 'tacticalGloves'];
   R.shuffle(pool);
@@ -73,18 +80,29 @@ export function rollDisguiseProfile(as, threat, opts = {}) {
     else traits.add(k);
   }
   if (opts.fromEnemySide) traits.add('fromEnemySide');
+  // 4단계: 어깨에 단 부대 패치(장비 단서가 없을 때)와 "소속 대!"에 댈 부대명
+  const units = CONFIG.dialogue.units;
+  const patchUnit = R.pick(units);
+  let unitClaim = null;
+  if (as === 'ally') {
+    if (skill >= 2) unitClaim = R.chance(CONFIG.dialogue.skill2UnitMismatch) ? R.pick(units.filter((u) => u !== patchUnit)).name : patchUnit.name;
+    else if (skill === 1) unitClaim = R.pick(FAKE_UNITS_PLAUSIBLE);
+    else unitClaim = R.pick(FAKE_UNITS_ODD);
+  }
   return {
     as, role, mode, skill, gear, traits,
     handsMode: R.chance(0.5) ? 'back' : 'pocket',
     revealed: false, revealedAt: null, revealReason: null,
     infiltrate: !!opts.infiltrate,
+    patchUnit: patchUnit.name, // 어깨 패치 부대 (패치 단서가 있으면 무시됨)
+    unitClaim, // "소속 대!" 대답 — 숙련도 0: 어색한 가짜 이름, 1: 그럴듯한 가짜 이름, 2: 진짜 부대명(패치와 다를 수 있음)
   };
 }
 
 /** 위장 복장 — 겉보기 진영의 복장에 장비 단서를 덧입힘 (표식 테이프는 spawn 쪽에서 Insignia 로) */
 export function disguiseOutfit(profile) {
   let o;
-  if (profile.as === 'ally') o = soldierOutfit('ally');
+  if (profile.as === 'ally') o = allyOutfit(CONFIG.dialogue.units.find((u) => u.name === profile.patchUnit));
   else {
     o = civilianOutfit(undefined, R.chance(0.1));
     if (o.bag === 'carry' && profile.traits.has('hideHands')) o.bag = null;
@@ -144,6 +162,19 @@ export class DisguiseController {
     this.revealT = 0;
     this.revealDur = 0.6;
     this.swapped = false;
+    // 4단계
+    this.ignoring = false; // '정지!'를 못 들은 척 계속 걷는 중
+    this.suspectT = 0; // '들킨 것 같음' — 기습 조건이 빨라짐
+    this.questions = 0;
+    this.pressured = false;
+    this.cmdHandsT = 0; // "손 들어!"로 든 손 유지
+    this.panicAcc = 0; // 조준당한 누적 (궁지 기습)
+    this.talkAimedAt = -99;
+    this.fleeTarget = null;
+    this.hideT = 0;
+    this.evacNode = null;
+    this.evacT = 0;
+    this.standT = 0;
     this.speeds = this.p.as === 'ally'
       ? { walk: CONFIG.ally.walk, run: CONFIG.ally.run }
       : { walk: CONFIG.civilian.walk * R.range(1.0, 1.15), run: CONFIG.civilian.run };
@@ -175,10 +206,17 @@ export class DisguiseController {
     n.aimPitch *= 0.9;
     this.lookT = Math.max(0, this.lookT - dt);
 
-    // 손 들기 (가짜 민간인: 조준당하면 — 늦게 들거나 안 듦)
+    // 손 들기 (가짜 민간인: 조준당하면 — 늦게 들거나 안 듦 / "손 들어!" 명령)
     this.notAimedT += dt;
-    if (this.notAimedT > 0.3) this.aimedT = Math.max(0, this.aimedT - dt * 2);
-    if (this.handsWant && this.notAimedT > CONFIG.civilian.handsUpRelease) this.handsWant = false;
+    if (this.notAimedT > 0.3) {
+      this.aimedT = Math.max(0, this.aimedT - dt * 2);
+      if (this.game.time - this.talkAimedAt > 0.3) this.panicAcc = Math.max(0, this.panicAcc - dt * 2);
+    }
+    this.suspectT = Math.max(0, this.suspectT - dt);
+    if (this.cmdHandsT > 0) {
+      this.cmdHandsT -= dt;
+      this.handsWant = true;
+    } else if (this.handsWant && this.notAimedT > CONFIG.civilian.handsUpRelease) this.handsWant = false;
     n.handsUp += ((this.handsWant ? 1 : 0) - n.handsUp) * Math.min(1, dt * 8);
     // 가짜 웅크림 (총성에 웅크리는 척)
     if (this.fakeCowerT > 0) this.fakeCowerT -= dt;
@@ -188,10 +226,17 @@ export class DisguiseController {
     n.handsMode = this.p.handsMode;
     n.hideHands += ((hide ? 1 : 0) - n.hideHands) * Math.min(1, dt * 4);
 
+    const away = this.mode === 'flee' || this.mode === 'hidden' || this.mode === 'fakeEvac';
     if (n.handsUp > 0.5 || this.fakeCowerT > 0) {
       n.curSpeed = 0;
       if (this.fakeCowerT > 0) n.crouchTarget = 1;
       if (n.handsUp > 0.5) n.faceTowards(this.game.player.feet.x, this.game.player.feet.z);
+    } else if (n.talkHoldT > 0 && !away && !this.ignoring) {
+      // 4단계: 대화 중 — 멈춰 서서 플레이어를 바라봄 (진짜 아군·민간인과 같은 모습)
+      n.curSpeed = 0;
+      n.crouchTarget = 0;
+      n.faceTowards(this.game.player.feet.x, this.game.player.feet.z);
+      n.aimTarget = this.p.as === 'ally' ? 0.3 : 0;
     } else {
       switch (this.mode) {
         case 'enter': this._enter(); break;
@@ -201,11 +246,16 @@ export class DisguiseController {
         case 'loiter': this._loiter(dt); break;
         case 'watch': this._watch(dt); break;
         case 'call': this._call(dt); break;
+        case 'flee': this._flee(dt); break;
+        case 'hidden': this._hidden(dt); break;
+        case 'fakeEvac': this._fakeEvac(dt); break;
+        case 'stand': this._stand(dt); break;
         default: break;
       }
     }
+    if (n.lowerT > 0) n.aimTarget = 0;
     if (this.lookT > 0 && n.curSpeed < 0.5) n.targetYaw = this.lookYaw;
-    if (this.p.as === 'ally') this._allyCombatAct(dt);
+    if (this.p.as === 'ally' && n.talkHoldT <= 0 && n.lowerT <= 0 && !away) this._allyCombatAct(dt);
     this._track(dt);
     this._checkAmbush(dt);
   }
@@ -306,7 +356,7 @@ export class DisguiseController {
     const g = this.game;
     if (!this.spoke && this.dist < 14) {
       this.spoke = true;
-      g.voice.say({ speaker: '아군', text: line('allyEscort'), channel: 'shout', priority: 1, voice: n.voice });
+      g.voice.say({ speaker: n.talkLabel, text: line('allyEscort'), channel: 'shout', priority: 1, voice: n.voice });
     }
     const t = escortTarget(g, n, 4.2, this.side);
     let arrived = true;
@@ -437,6 +487,155 @@ export class DisguiseController {
     }
   }
 
+  // ------------------------------------------------------------------
+  // 4단계: 말 걸기에 대한 행동 (규칙은 dialogue/Responses.js 가 정하고 여기서 실행)
+  // ------------------------------------------------------------------
+  /** '정지!' 반응 실행: 'stop' | 'ignore' | 'flee' */
+  talkHalt(reaction) {
+    const n = this.npc;
+    if (reaction === 'stop') {
+      n.holdForTalk(3);
+      n.noteBehavior('stoppedOnHalt');
+    } else if (reaction === 'ignore') {
+      this.ignoring = true;
+      n.noteBehavior('ignoredHalt');
+    } else this.startFlee('halt');
+  }
+
+  /** 못 들은 척하다가 질문을 받고서야 멈춤 */
+  stopIgnoring() {
+    this.ignoring = false;
+    this.npc.holdForTalk(3);
+  }
+
+  /** 질문을 받음 — 질문 자체가 압박: '오래 붙어 있음' 기습까지 남은 시간이 줄고, 계속 물으면 들킨 것 같다고 느낌 */
+  onQuestioned() {
+    const C = CONFIG.dialogue;
+    this.questions++;
+    // 질문 압박: 기습까지 남은 시간이 줄지만, 묻자마자 터지지는 않게 최소 pressureMinLeft 초는 남김
+    this.closeT = Math.max(this.closeT, Math.min(this.closeT + C.questionPressure, this.patience - C.pressureMinLeft));
+    if (!this.pressured && this.p.skill >= 1 && this.questions >= C.suspect.pressureQuestions) {
+      this.pressured = true;
+      this.suspect();
+    }
+  }
+
+  /** '들킨 것 같으면' (숙련도 1~2): 기습 조건이 빨라지거나 거리를 벌려 도주 */
+  suspect() {
+    const S = CONFIG.dialogue.suspect;
+    if (this.mode === 'reveal' || this.mode === 'flee' || this.mode === 'hidden') return;
+    if (R.chance(S.boostChance)) {
+      // 기습 조건 가속: 계속 붙어 있으면 revealIn 초 안에 기습 — 플레이어에겐 틀린 대답을 듣고 판단할 몇 초가 남는다
+      this.suspectT = S.boostTime;
+      this.closeT = Math.max(this.closeT, this.patience - R.range(...S.revealIn));
+    } else this.startFlee('question');
+  }
+
+  /** 도주: 플레이어에게서 멀리, 가능하면 안 보이는 곳으로 → 숨었다가 다시 접근하거나 습격을 부름 */
+  startFlee(variant) {
+    const n = this.npc;
+    const g = this.game;
+    const F = CONFIG.dialogue.flee;
+    if (this.mode === 'reveal' || this.p.revealed) return;
+    this.ignoring = false;
+    n.talkHoldT = 0;
+    n.lowerT = 0;
+    this.cmdHandsT = 0;
+    this.handsWant = false;
+    n.noteBehavior('fledTalk', variant);
+    const pf = g.player.feet;
+    const cands = g.world.nav.inRadius(n.position.x, n.position.y, n.position.z, F.dist[1] + 6, (q) => !q.removed && Math.abs(q.y - n.position.y) < 4);
+    let best = null;
+    let bestS = -Infinity;
+    for (const q of cands) {
+      const dp = Math.hypot(q.x - pf.x, q.z - pf.z);
+      if (dp < F.dist[0]) continue;
+      // 플레이어에게서 멀어지는 쪽, 너무 멀지 않게
+      const away = (q.x - pf.x) * (n.position.x - pf.x) + (q.z - pf.z) * (n.position.z - pf.z);
+      const s = (away > 0 ? 4 : -4) - Math.abs(dp - (F.dist[0] + F.dist[1]) / 2) * 0.15 + R.range(0, 3);
+      if (s > bestS) {
+        bestS = s;
+        best = q;
+      }
+    }
+    this.fleeTarget = best;
+    this.hideT = R.range(...F.hideTime);
+    this._setMode('flee');
+  }
+
+  _flee(dt) {
+    const n = this.npc;
+    n.crouchTarget = 0;
+    n.aimTarget = 0;
+    let arrived = true;
+    if (this.fleeTarget) arrived = moveToward(n, dt, this.fleeTarget.x, this.fleeTarget.z, { walk: this.speeds.run, run: this.speeds.run * 1.05, runDist: 2, stopDist: 1.2, repath: 1.5, y: this.fleeTarget.y });
+    if (arrived || this.modeT > 14) this._setMode('hidden');
+  }
+
+  // 숨어서 기다림 (플레이어에게 보이는 동안은 시간이 가지 않음) → 습격을 부르거나 다른 위치에서 다시 접근
+  _hidden(dt) {
+    const n = this.npc;
+    n.curSpeed = 0;
+    n.crouchTarget = 0.6;
+    if (!n.visibleToPlayer) this.hideT -= dt;
+    if (this.hideT > 0) return;
+    if (this.calls === 0 && R.chance(CONFIG.dialogue.flee.callChance)) {
+      this.closeT = 0;
+      this._setMode('call');
+    } else {
+      this.closeT = 0;
+      this.blendT = 0;
+      this._setMode('approach');
+    }
+  }
+
+  /** 가짜 대피: 대피로로 가는 척하다 멈추거나 되돌아옴 (행동 기록에 남음) */
+  startFakeEvac() {
+    const n = this.npc;
+    const id = this.game.npcs.evacNodeFor(n);
+    this.evacNode = id != null ? this.game.world.nav.get(id) : null;
+    this.evacT = R.range(...CONFIG.dialogue.fakeEvac.walk);
+    n.talkHoldT = 0;
+    this._setMode('fakeEvac');
+  }
+
+  _fakeEvac(dt) {
+    const n = this.npc;
+    this.evacT -= dt;
+    if (this.evacNode && this.evacT > 0) {
+      moveToward(n, dt, this.evacNode.x, this.evacNode.z, { walk: this.speeds.walk * 1.2, run: this.speeds.run, runDist: 999, stopDist: 1, repath: 3, y: this.evacNode.y });
+      return;
+    }
+    const ret = R.chance(CONFIG.dialogue.fakeEvac.returnChance);
+    n.noteBehavior('fakeEvac', ret ? 'return' : 'stop');
+    n.dialogueFailed = true;
+    if (ret) {
+      this.closeT = 0;
+      this._setMode('approach');
+    } else {
+      this.standT = R.range(5, 9);
+      this._setMode('stand');
+    }
+  }
+
+  // 멈춰 서서 두리번거림 → 다시 접근
+  _stand(dt) {
+    const n = this.npc;
+    n.curSpeed = 0;
+    this.standT -= dt;
+    if (this.modeT % 2.5 < dt) this.lookAt(this.game.player.feet, 1.2);
+    if (this.standT <= 0) this._setMode('approach');
+  }
+
+  /** "손 들어!": lag 면 한 손이 늦게 (숙련도 2) */
+  commandHands(hold, lagSec = 0) {
+    const n = this.npc;
+    this.cmdHandsT = hold;
+    this.handsWant = true;
+    this.aimedT = Math.max(this.aimedT, 0);
+    if (lagSec > 0) n.lagHands(lagSec);
+  }
+
   // 가짜 아군의 교전 흉내: 허공에 쏘기 / 아예 안 쏘기 / 적 근처로 빗나가게 쏘기(숙련)
   _allyCombatAct(dt) {
     const n = this.npc;
@@ -519,7 +718,7 @@ export class DisguiseController {
   //   · 기회(등을 보임·재장전·관찰 모드)가 opportunityDelay 만큼 이어지면, 또는 · 붙어 있은 지 patience 초가 지나면
   // ------------------------------------------------------------------
   _checkAmbush(dt) {
-    if (this.mode === 'enter' || this.mode === 'call') return;
+    if (this.mode === 'enter' || this.mode === 'call' || this.mode === 'flee' || this.mode === 'hidden') return;
     const A = CONFIG.disguise.ambush;
     const g = this.game;
     const n = this.npc;
@@ -543,21 +742,29 @@ export class DisguiseController {
     _v.y = 0;
     const ang = THREE.MathUtils.radToDeg(_f.angleTo(_v));
     this.backAngle = ang;
-    const back = this.p.mode !== 'escort' && ang > A.backAngle;
+    // 4단계: "총 내려!"에 따르는 척하는 중이면 플레이어가 조금만 시선을 돌려도 기회 (기습 조건이 빨리 참)
+    const L = CONFIG.dialogue.lowered;
+    const lowered = n.lowerT > 0;
+    const back = lowered ? ang > L.backAngle : this.p.mode !== 'escort' && ang > A.backAngle;
     const reload = g.weapon.reloading;
     const observing = g.observation && g.observation.active && this.dist < 7;
     let need = this.oppNeed;
     if (observing && !back && !reload) need *= 1 + this.p.skill * 0.6;
+    if (lowered) need *= L.oppMul;
+    const S = CONFIG.dialogue.suspect;
+    if (this.suspectT > 0) need *= S.oppMul;
+    const patience = this.patience;
     this.oppNow = back ? '등' : reload ? '재장전' : observing ? '관찰' : null;
     if (this.oppNow) this.oppT += dt;
     else this.oppT = Math.max(0, this.oppT - dt * 2);
     if (this.oppT >= need) this.startReveal(reload ? 'reload' : observing ? 'observe' : 'back');
-    else if (this.closeT >= this.patience) this.startReveal('patience');
+    else if (this.closeT >= patience) this.startReveal('patience');
   }
 
   /** 기습 진행도 (디버그): 0~1 */
   get ambushProgress() {
-    return Math.max(this.oppT / this.oppNeed, this.closeT / this.patience);
+    const sus = this.suspectT > 0;
+    return Math.max(this.oppT / (this.oppNeed * (sus ? CONFIG.dialogue.suspect.oppMul : 1)), this.closeT / this.patience);
   }
 
   // ------------------------------------------------------------------
@@ -593,7 +800,20 @@ export class DisguiseController {
       if (this.p.skill >= 1 || R.chance(0.4)) this.game.voice.say({ speaker: '민간인', text: line('civAimed'), channel: 'civilian', priority: 2, voice: n.voice });
     }
     if (T.has('noHands') && this.aimedT > 1.2) n.noteBehavior('noHands');
-    if (this.aimedT > this.panicNeed && this.dist < 10 && this.los) this.startReveal('cornered');
+    this._panic(step);
+  }
+
+  // 궁지: 오래 겨눠지면 먼저 기습
+  _panic(step) {
+    this.panicAcc += step;
+    if (this.panicAcc > this.panicNeed && this.dist < 10 && this.los) this.startReveal('cornered');
+  }
+
+  // 4단계: 대화 중 겨눠짐 — 손 들기 반응 없이 궁지 압박만 (숙련될수록 태연한 척: 덜 쌓임)
+  onTalkAimed(step) {
+    if (this.p.as !== 'civilian' || this.mode === 'reveal') return;
+    this.talkAimedAt = this.game.time; // 손 들기 반응(notAimedT)은 건드리지 않음 — 진짜 민간인처럼 곧 손을 내림
+    this._panic(step * (this.p.skill >= 1 ? CONFIG.dialogue.aimPanicMulInTalk : 1));
   }
 
   // 아군 무전 콜아웃이 들림: 진짜 아군처럼 그쪽을 돌아보거나, 성향에 따라 무시
@@ -620,6 +840,11 @@ export class DisguiseController {
     this.revealT = 0;
     this.p.revealStarted = true;
     this.p.revealReason = reason;
+    this.ignoring = false;
+    this.cmdHandsT = 0;
+    n.talkHoldT = 0;
+    n.lowerT = 0;
+    n.cardT = 0;
     this.revealDur = reason === 'damaged' ? A.damagedTelegraph : R.range(A.telegraph[0], A.telegraph[1]);
     n.path = null;
     n.curSpeed = 0;
@@ -701,9 +926,9 @@ export class DisguiseController {
     g.events.emit(Events.DISGUISE_REVEALED, { npc: n, as: p.as, role: p.role, reason: p.revealReason, ambush: p.revealReason !== 'damaged' });
   }
 
-  /** 정체를 다 드러내기 전에 사살됐는지 (먼저 맞아서 드러내던 중이면 플레이어의 판단으로 인정) */
+  /** 정체를 다 드러내기 전에 사살됐는지 (먼저 맞아서, 또는 4단계 문답에 막혀 드러내던 중이면 플레이어의 판단으로 인정) */
   get identifiedKill() {
-    return !this.p.revealed && (!this.p.revealStarted || this.p.revealReason === 'damaged');
+    return !this.p.revealed && (!this.p.revealStarted || this.p.revealReason === 'damaged' || this.p.revealReason === 'questioned');
   }
 
   // 드러내기 전에 사살됨: 숨긴 무기가 떨어지거나 테이프 완장이 벗겨지는 연출 (점수는 ScoreSystem 이 NPC_KILLED 로 처리)
