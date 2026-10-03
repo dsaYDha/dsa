@@ -1,5 +1,7 @@
 // NPC 관리 — 생성(적·아군 분대·민간인·위장 적)·갱신·제거, 부위별 히트박스 레이캐스트, 엄폐/창가/은신/대피 지점 선택,
 // 플레이어 화면 노출 추적(firstSeenAt), 조준 중인 NPC 질의(4단계 말 걸기용), 진영별 목록(진짜/겉보기), 청각(총성)·공황·무전 전파
+// v1.1: 엄폐 판정(coverCheck) — 저장된 방향(coverDir)이 아니라 위협 위치 기준으로 그때그때 레이로 판정해 '유효한 엄폐'에서만 웅크리게,
+//       엄폐 지점 점수(차단 필수·이동 거리·적정 거리·예약), 플레이어가 겨누는 적에게 회피 기회(onAimedByPlayer)
 import * as THREE from 'three';
 import { CONFIG } from '../config.js';
 import { Events } from '../core/EventBus.js';
@@ -20,6 +22,9 @@ const _pm = new THREE.Matrix4();
 const _hits = [];
 const _meshes = [];
 const _dir = new THREE.Vector3();
+const _ca = new THREE.Vector3();
+const _cb = new THREE.Vector3();
+const _te = new THREE.Vector3();
 
 export class NPCManager {
   constructor(game) {
@@ -36,6 +41,8 @@ export class NPCManager {
     this._evacNodes = null;
     this.shadowDist = 30; // 그래픽 프리셋: 그림자를 드리우는 NPC 거리 (0 = 끔)
     this.lodStats = { full: 0, half: 0, third: 0 };
+    // v1.1 엄폐 판정 통계 (디버그): 판정 수, 무효라서 웅크림을 막은 수, 웅크린 전투 NPC 중 무효 판정인 수(매 프레임 — 0 이어야 함)
+    this.coverStats = { checks: 0, prevented: 0, crouched: 0, crouchedInvalid: 0 };
     game.events.on(Events.WEAPON_FIRED, (e) => {
       // 적은 플레이어 총성을 듣고, 민간인은 모든 총성에 반응
       const r2 = CONFIG.npc.hearingRadius ** 2;
@@ -282,6 +289,8 @@ export class NPCManager {
     const sd2 = this.shadowDist * this.shadowDist;
     const L = this.lodStats;
     L.full = L.half = L.third = 0;
+    const CS = this.coverStats;
+    CS.crouched = CS.crouchedInvalid = 0;
     for (const n of this.list) {
       // 5단계 LOD: 가깝거나 화면에 보이는 인물은 매 프레임, 화면 밖 40m 넘으면 3프레임, 보여도 55m 넘으면 2프레임마다 애니메이션
       //   + 화면 밖 45m 넘으면 AI(think)도 2프레임에 한 번 (누적 dt)
@@ -292,6 +301,11 @@ export class NPCManager {
       else if (n.animEvery === 2) L.half++;
       else L.third++;
       n.update(dt);
+      // v1.1 디버그: 웅크린 전투 NPC 중 유효한 엄폐가 아닌 수 (규칙대로면 0)
+      if (n.alive && n.coverEval && !n.disguised && n.crouchTarget > 0.5 && n.crouch > 0.55) {
+        CS.crouched++;
+        if (!n.coverOK) CS.crouchedInvalid++;
+      }
       // 실내 음영 + 가까운 NPC 만 그림자
       const indoor = game.world.isIndoors(n.position) ? 1 : 0;
       n._indoor = (n._indoor ?? indoor) + (indoor - (n._indoor ?? indoor)) * Math.min(1, dt * 4);
@@ -406,22 +420,32 @@ export class NPCManager {
   }
 
   // 플레이어가 가까이서 민간인(처럼 보이는 인물)을 총으로 겨누면 반응 (0.1초 주기) — 관찰 모드(총을 내림)일 땐 반응 없음
+  // v1.1: 빨간 표식 적을 겨누고 있으면 그 적에게 회피 기회 (onAimedByPlayer — 한동안 겨누면 확률로 숨거나 옆으로 비킴)
   _updateAim(dt) {
     this._aimT -= dt;
     if (this._aimT > 0) return;
     const step = 0.1;
     this._aimT = step;
     const game = this.game;
-    if (!this.apparent.civilian.length || !game.player.alive) return;
+    const civ = this.apparent.civilian.length > 0;
+    const hostile = this.apparent.enemy.length > 0;
+    if ((!civ && !hostile) || !game.player.alive) return;
     if (game.observation && game.observation.weaponDown) return;
-    const a = this.getAimedNPC({ maxDistance: CONFIG.civilian.aimReactDist, coneDeg: 4 });
-    if (!a || a.npc.apparentFaction !== 'civilian') return;
-    // 4단계: 말을 거는 상대는 '겨눔'이 아니라 대화 중 — 손 들기 반응 없음 ("손 들어!"로 따로 시험). 위장 적은 궁지 압박만 누적
-    if (game.dialogue && game.dialogue.target === a.npc) {
-      if (a.npc.disguised) a.npc.ctl.onTalkAimed(step);
+    const E = CONFIG.npc.evade;
+    const a = this.getAimedNPC({ maxDistance: hostile ? E.maxDist : CONFIG.civilian.aimReactDist, coneDeg: E.cone });
+    if (!a) return;
+    const n = a.npc;
+    if (n.apparentFaction === 'enemy') {
+      if (n.onAimedByPlayer) n.onAimedByPlayer(step);
       return;
     }
-    if (a.npc.onAimedAt) a.npc.onAimedAt(step);
+    if (n.apparentFaction !== 'civilian' || a.distance > CONFIG.civilian.aimReactDist) return;
+    // 4단계: 말을 거는 상대는 '겨눔'이 아니라 대화 중 — 손 들기 반응 없음 ("손 들어!"로 따로 시험). 위장 적은 궁지 압박만 누적
+    if (game.dialogue && game.dialogue.target === n) {
+      if (n.disguised) n.ctl.onTalkAimed(step);
+      return;
+    }
+    if (n.onAimedAt) n.onAimedAt(step);
   }
 
   // 민간인 사망 → 주변 민간인 공황 (흩어져 도망) + 디렉터에 공황 시간 통보
@@ -499,45 +523,147 @@ export class NPCManager {
     return R.pick(good).id;
   }
 
+  // ------------------------------------------------------------------
+  // v1.1 엄폐 판정 — 위협(threatEye) 위치 기준으로 그때그때 레이 판정 (노드에 저장된 coverDir 은 후보 순서에만 참고)
+  // ------------------------------------------------------------------
   /**
-   * 엄폐 지점 찾기
-   * advance: 플레이어에게 더 다가가는 쪽 선호, flank: 현재 각도에서 크게 벗어난 지점 선호(측면 우회)
+   * 발 위치 (x, y, z) 가 위협에 대해 '유효한 엄폐'인지
+   *  · protected: 위협 눈높이에서 웅크린 머리·몸통(좌우)으로 쏜 레이가 모두 정적 지형에 막힘
+   *  · peek: 일어서면('up') 또는 옆으로 내밀면('left'|'right') 위협이 보임 (사격 가능) — 못 보면 null
+   *  · valid = protected && peek. leanX/leanZ: 옆으로 내밀 때의 위치 오프셋
+   * @returns {object} out (재사용 객체를 넘기면 그대로 채움)
    */
-  findCover(npc, { advance = false, flank = false } = {}) {
+  coverCheck(x, y, z, threatEye, out = { protected: false, peek: null, valid: false, leanX: 0, leanZ: 0 }, margin = 0) {
+    const C = CONFIG.npc.cover;
+    const col = this.game.world.collision;
+    this.coverStats.checks++;
+    out.protected = false;
+    out.peek = null;
+    out.valid = false;
+    out.leanX = 0;
+    out.leanZ = 0;
+    let dx = x - threatEye.x;
+    let dz = z - threatEye.z;
+    const d = Math.hypot(dx, dz) || 1;
+    dx /= d;
+    dz /= d;
+    const sx = -dz; // 위협에서 본 오른쪽
+    const sz = dx;
+    // 1) 웅크린 머리·몸통 좌우 — 하나라도 보이면 엄폐가 아님 (margin: 고를 때는 여유를 두고 더 넓게 — 위협이 조금 움직여도 유지되게)
+    const sh = C.shoulder + margin;
+    if (!col.segmentBlocked(threatEye, _ca.set(x, y + C.headH + margin * 0.5, z))) return out;
+    if (!col.segmentBlocked(threatEye, _ca.set(x + sx * sh, y + C.torsoH, z + sz * sh))) return out;
+    if (!col.segmentBlocked(threatEye, _ca.set(x - sx * sh, y + C.torsoH, z - sz * sh))) return out;
+    if (margin > 0) {
+      if (!col.segmentBlocked(threatEye, _ca.set(x + sx * margin, y + C.headH, z + sz * margin))) return out;
+      if (!col.segmentBlocked(threatEye, _ca.set(x - sx * margin, y + C.headH, z - sz * margin))) return out;
+    }
+    out.protected = true;
+    // 2) 일어서면 위협이 보이는지
+    if (!col.segmentBlocked(_ca.set(x, y + C.standEyeH, z), threatEye)) {
+      out.peek = 'up';
+      out.valid = true;
+      return out;
+    }
+    // 3) 옆으로 내밀면 (몸이 들어갈 자리가 비어 있는 쪽만)
+    const first = (Math.floor(x * 7 + z * 13) & 1) === 0 ? 1 : -1;
+    for (let k = 0; k < 2; k++) {
+      const side = k === 0 ? first : -first;
+      const lx = sx * side * C.leanDist;
+      const lz = sz * side * C.leanDist;
+      _cb.set(x, y + 1.0, z);
+      _ca.set(x + lx, y + 1.0, z + lz);
+      if (col.segmentBlocked(_cb, _ca) || col.segmentBlocked(_ca, _cb)) continue;
+      if (!col.segmentBlocked(_ca.set(x + lx, y + C.leanEyeH, z + lz), threatEye)) {
+        out.peek = side > 0 ? 'right' : 'left';
+        out.leanX = lx;
+        out.leanZ = lz;
+        out.valid = true;
+        return out;
+      }
+    }
+    return out;
+  }
+
+  /**
+   * 노드의 엄폐 판정 (같은 위협 위치·0.4초 안이면 캐시 — 여러 적이 같은 노드를 볼 때·디버그 표시)
+   * margin > 0: 고를 때 쓰는 여유 있는 판정 (따로 캐시)
+   */
+  nodeCover(node, threatEye, margin = 0) {
+    const key = margin > 0 ? '_cvm' : '_cv';
+    const c = node[key] || (node[key] = { t: -9, tx: 0, ty: 0, tz: 0, res: { protected: false, peek: null, valid: false, leanX: 0, leanZ: 0 } });
+    const t = this.game.time;
+    if (t - c.t < 0.4 && Math.abs(c.tx - threatEye.x) + Math.abs(c.ty - threatEye.y) + Math.abs(c.tz - threatEye.z) < 0.5) return c.res;
+    c.t = t;
+    c.tx = threatEye.x;
+    c.ty = threatEye.y;
+    c.tz = threatEye.z;
+    return this.coverCheck(node.x, node.y, node.z, threatEye, c.res, margin);
+  }
+
+  /**
+   * 엄폐 지점 찾기 (v1.1: 위협 기준 레이 판정 필수)
+   * 점수: 위협 차단(필수 — coverCheck.valid) · 이동 거리 · 위협과의 적정 거리(preferredRange) · 다른 NPC 예약(제외)·붐빔
+   * o.advance: 위협에 더 다가가는 쪽 / o.flank: 지금 각도에서 크게 벗어난 지점(측면 우회) / o.retreat: 위협에서 멀어지는 쪽
+   * o.maxDist: 이동 거리 상한(뚫린 곳에서 가까운 엄폐로) / o.exclude: 제외할 노드 / o.range: [최소, 최대] 위협 거리 (기본 tcfg.preferredRange)
+   * o.anyNode: 엄폐 노드에서 못 찾으면 일반 노드(건물 모퉁이·출입구 등)도 판정
+   */
+  findCover(npc, { advance = false, flank = false, retreat = false, maxDist = 0, exclude = null, range = null, anyNode = false } = {}) {
     const game = this.game;
     const nav = game.world.nav;
-    const pf = game.player.feet;
-    const [minR, maxR] = npc.tcfg.preferredRange;
+    const C = CONFIG.npc.cover;
+    const eye = npc.threatEye(_te);
+    if (!eye) return null;
+    const tf = { x: eye.x, z: eye.z };
+    const [minR, maxR] = range || (npc.tcfg && npc.tcfg.preferredRange) || [8, 40];
     const pref = advance ? minR + (maxR - minR) * 0.35 : (minR + maxR) / 2;
-    const search = Math.max(30, npc.position.distanceTo(pf) + 6);
-    const cands = nav.inRadius(npc.position.x, 0, npc.position.z, search, (n) => n.type === 'cover' && (n.reservedBy == null || n.reservedBy === npc));
-    const npcAng = Math.atan2(npc.position.z - pf.z, npc.position.x - pf.x);
-    const scored = [];
-    for (const n of cands) {
-      const dx = pf.x - n.x;
-      const dz = pf.z - n.z;
-      const d = Math.hypot(dx, dz);
-      if (d < Math.max(5, minR * 0.6) || d > maxR + 8) continue;
-      const prot = n.coverDir ? (n.coverDir.x * dx + n.coverDir.z * dz) / d : 0;
-      if (prot < 0.45) continue;
-      // 다른 NPC 와 너무 가까우면 감점
-      let crowd = 0;
-      for (const o of this.list) if (o !== npc && o.alive && Math.hypot(o.position.x - n.x, o.position.z - n.z) < 2.5) crowd++;
-      let score = -Math.abs(d - pref) - npc.position.distanceTo(_v.set(n.x, n.y, n.z)) * 0.3 + prot * 4 + R.range(0, 3) - crowd * 5;
-      if (flank) {
-        const a = Math.atan2(n.z - pf.z, n.x - pf.x);
-        let da = Math.abs(Math.atan2(Math.sin(a - npcAng), Math.cos(a - npcAng)));
-        score += THREE.MathUtils.radToDeg(da) / 8;
-        if (da < 0.7) score -= 10;
+    const myD = Math.hypot(npc.position.x - tf.x, npc.position.z - tf.z);
+    const search = maxDist > 0 ? maxDist : Math.max(30, myD + 6);
+    const npcAng = Math.atan2(npc.position.z - tf.z, npc.position.x - tf.x);
+    const free = (n) => n !== exclude && (n.reservedBy == null || n.reservedBy === npc || !n.reservedBy.alive);
+    const pick = (cands) => {
+      const scored = [];
+      for (const n of cands) {
+        const dx = tf.x - n.x;
+        const dz = tf.z - n.z;
+        const d = Math.hypot(dx, dz);
+        // 적정 거리 밖은 제외 — 단 '가까운 엄폐'(maxDist) 찾기는 위협에 너무 붙는 곳만 제외 (점수로만 거리 선호)
+        if (maxDist > 0 ? d < 3.5 : d < Math.max(4, minR * 0.5) || d > maxR + 10) continue;
+        const travel = Math.hypot(n.x - npc.position.x, n.z - npc.position.z);
+        if (maxDist > 0 && travel > maxDist) continue;
+        let crowd = 0;
+        for (const o of this.list) if (o !== npc && o.alive && Math.hypot(o.position.x - n.x, o.position.z - n.z) < 2.2) crowd++;
+        if (crowd >= 2) continue;
+        // 저장된 방향은 '판정할 순서'에만 참고 (실제 판정은 아래 coverCheck)
+        const hint = n.coverDir ? (n.coverDir.x * dx + n.coverDir.z * dz) / (d || 1) : 0;
+        let score = -Math.abs(d - pref) * 0.8 - travel * 0.45 + hint * 2.5 + R.range(0, 2) - crowd * 5;
+        if (flank) {
+          const a = Math.atan2(n.z - tf.z, n.x - tf.x);
+          const da = Math.abs(Math.atan2(Math.sin(a - npcAng), Math.cos(a - npcAng)));
+          score += THREE.MathUtils.radToDeg(da) / 8;
+          if (da < 0.7) score -= 10;
+        }
+        if (retreat) score += (d - myD) * 0.5;
+        scored.push({ n, score });
       }
-      scored.push({ n, score });
+      scored.sort((a, b) => b.score - a.score);
+      let tried = 0;
+      for (let i = 0; i < scored.length && tried < C.candidates; i++) {
+        const n = scored[i].n;
+        tried++;
+        if (!this.nodeCover(n, eye, C.selectMargin).valid) continue;
+        if (nav.findPath(npc.navNode, n.id, { maxIter: 3000 })) return n;
+      }
+      return null;
+    };
+    const coverNodes = nav.inRadius(npc.position.x, npc.position.y, npc.position.z, search, (n) => n.type === 'cover' && free(n));
+    let best = pick(coverNodes);
+    if (!best && anyNode) {
+      // 엄폐 노드가 없으면 건물 모퉁이·출입구·골목 등 일반 노드도 (같은 층)
+      const any = nav.inRadius(npc.position.x, npc.position.y, npc.position.z, Math.min(search, C.nearRadius), (n) => n.type !== 'cover' && n.type !== 'window' && n.type !== 'roof' && Math.abs(n.y - npc.position.y) < 1 && free(n));
+      best = pick(any);
     }
-    scored.sort((a, b) => b.score - a.score);
-    for (let i = 0; i < Math.min(4, scored.length); i++) {
-      const n = scored[i].n;
-      if (nav.findPath(npc.navNode, n.id, { maxIter: 3000 })) return n;
-    }
-    return null;
+    return best;
   }
 
   // 창가·옥상 자리 고르기 (같은 건물, 플레이어 쪽을 향한 곳)

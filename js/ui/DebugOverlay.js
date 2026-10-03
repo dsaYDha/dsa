@@ -3,12 +3,20 @@
 // 4단계: 암구호·실내 기준수 상태, 대화 대상(없으면 조준 대상)이 아는 정보 (현재/이전 암구호·실내 기준수·부대명), 문답 통계
 // 5단계: 성능(업데이트·렌더 ms, 드로우콜·삼각형, 지오메트리·텍스처·셰이더 수, 초당 시야 판정·레이캐스트, NPC LOD, 스킨 캐시),
 //        난이도 곡선 구간·모드·난이도, 긴장도, 그래픽 프리셋
+// v1.1: 엄폐 지점 표시 — 플레이어 40m 안 엄폐 노드를 플레이어(적의 위협) 기준으로 판정해 유효=초록 / 무효=빨강 기둥,
+//       전투 NPC 가 쓰는 엄폐 자리는 굵은 기둥(그 NPC 의 위협 기준). 머리 위 라벨에 상태·그 상태가 된 이유·웅크림 판정,
+//       패널에 '웅크린 전투 NPC 중 무효 엄폐'(0 이어야 함)·막은 웅크림 누계
 import * as THREE from 'three';
 import { CONFIG } from '../config.js';
 import { PhaseLabel } from '../director/SpawnDirector.js';
 import { skinCacheStats } from '../npc/HumanoidRig.js';
 
 const _v = new THREE.Vector3();
+const _m = new THREE.Matrix4();
+const _c = new THREE.Color();
+const _eye = new THREE.Vector3();
+const MAX_MARKERS = 240;
+const COL = { valid: 0x2bd96b, invalid: 0xff3b30, spotValid: 0x7dff9e, spotInvalid: 0xff8a3d };
 
 const GEAR_KO = { curvedRifle: '굽은탄창', enemyHelmet: '적헬멧', patchMissing: '패치없음', patchWrong: '패치다름', tapeBand: '테이프완장',
   combatBoots: '군화', waistBulge: '허리불룩', backRifle: '등총몸', radio: '무전기', vestStraps: '조끼끈', tacticalGloves: '전술장갑' };
@@ -74,6 +82,65 @@ export class DebugOverlay {
       this.labelsEl.innerHTML = '';
       this.labels.clear();
     }
+    if (this.markers) this.markers.visible = this.enabled;
+  }
+
+  // v1.1 엄폐 지점 기둥 (인스턴스 메시 하나 — 디버그를 켰을 때만 만들고 그림)
+  _ensureMarkers() {
+    if (this.markers) return this.markers;
+    const geo = new THREE.CylinderGeometry(0.07, 0.07, 2.3, 6);
+    geo.translate(0, 1.15, 0);
+    const mat = new THREE.MeshBasicMaterial({ color: 0xffffff, transparent: true, opacity: 0.7, depthTest: false, depthWrite: false, fog: false });
+    const m = new THREE.InstancedMesh(geo, mat, MAX_MARKERS);
+    m.instanceMatrix.setUsage(THREE.DynamicDrawUsage);
+    m.frustumCulled = false;
+    m.renderOrder = 999;
+    m.count = 0;
+    m.name = 'DebugCoverMarkers';
+    this.game.scene.add(m);
+    this.markers = m;
+    this._markerCursor = 0;
+    return m;
+  }
+
+  _renderCoverMarkers() {
+    const g = this.game;
+    const m = this._ensureMarkers();
+    m.visible = true;
+    const npcs = g.npcs;
+    const p = g.player.feet;
+    const eye = _eye.set(p.x, p.y + CONFIG.player.standHeight - CONFIG.player.eyeOffset, p.z); // 적과 같은 기준 (선 눈높이)
+    let k = 0;
+    // 전투 NPC 가 쓰는 엄폐 자리 (그 NPC 의 위협 기준, 굵게)
+    for (const n of npcs.list) {
+      if (k >= MAX_MARKERS || !n.alive || !n.coverEval || n.disguised || !n.inCoverSpot) continue;
+      const a = n.coverAnchor;
+      _m.makeScale(2.4, 1.15, 2.4).setPosition(a.x, a.y, a.z);
+      m.setMatrixAt(k, _m);
+      m.setColorAt(k, _c.setHex(n.coverEval.valid ? COL.spotValid : COL.spotInvalid));
+      k++;
+    }
+    // 플레이어 40m 안 엄폐 노드 (적의 위협 = 플레이어 기준) — 판정은 한 번에 30개씩 돌아가며 갱신
+    const nodes = g.world.nav.inRadius(p.x, p.y, p.z, 40, (n) => n.type === 'cover');
+    let fresh = 0;
+    const start = this._markerCursor % Math.max(1, nodes.length);
+    for (let i = 0; i < nodes.length && k < MAX_MARKERS; i++) {
+      const n = nodes[(start + i) % nodes.length];
+      let res = n._cv ? n._cv.res : null;
+      if ((!res || g.time - n._cv.t > 1.5) && fresh < 30) {
+        res = npcs.nodeCover(n, eye);
+        fresh++;
+      }
+      if (!res) continue;
+      _m.makeScale(1, 1, 1).setPosition(n.x, n.y, n.z);
+      m.setMatrixAt(k, _m);
+      m.setColorAt(k, _c.setHex(res.valid ? COL.valid : COL.invalid));
+      k++;
+    }
+    this._markerCursor += 30;
+    m.count = k;
+    m.instanceMatrix.needsUpdate = true;
+    if (m.instanceColor) m.instanceColor.needsUpdate = true;
   }
 
   frame(dt, frameMs) {
@@ -90,6 +157,7 @@ export class DebugOverlay {
     if (this._t <= 0) {
       this._t = 0.2;
       this._renderPanel();
+      this._renderCoverMarkers();
     }
     this._renderLabels();
   }
@@ -124,6 +192,7 @@ export class DebugOverlay {
       `<b>디렉터</b> ${PhaseLabel[d.phase]} (${d.label}) · 긴장도 ${d.intensity.toFixed(2)}`,
       `<b>위협</b> ${d.threat} · 다음 단계까지 ${d.nextLevelIn.toFixed(0)}s`,
       `<b>상태</b> ${Object.entries(byState).map(([k, v]) => `${k}:${v}`).join(' ') || '-'}`,
+      `<b>엄폐</b> 웅크린 전투 NPC ${g.npcs.coverStats.crouched} (그중 무효 엄폐 <b>${g.npcs.coverStats.crouchedInvalid}</b>) · 무효라 막은 웅크림 누계 ${g.npcs.coverStats.prevented} · 판정 누계 ${g.npcs.coverStats.checks} · 기둥: 초록 유효 / 빨강 무효 (굵은 것 = NPC 가 쓰는 자리)`,
       `<b>최근 출현</b> ${last || '-'}`,
       `<b>플레이어</b> (${p.position.x.toFixed(1)}, ${(p.position.y - CONFIG.player.radius).toFixed(1)}, ${p.position.z.toFixed(1)}) ${indoor ? `실내 B${indoor.building.id} ${indoor.floor + 1}층` : '실외'}`,
       `<b>조준 NPC</b> ${aimed ? `#${aimed.npc.id} ${aimed.npc.trueFaction} ${aimed.distance.toFixed(1)}m` : '-'}`,
@@ -176,6 +245,12 @@ export class DebugOverlay {
       el.style.top = `${((1 - _v.y) / 2) * h}px`;
       const app = n.apparentFaction !== n.trueFaction ? `(겉:${n.apparentFaction})` : '';
       let text = `${n.trueFaction}${app}${n.alive ? '' : ' ✝'} · ${n.type || n.kind} · ${n.stateLabel || ''}${n.visibleToPlayer ? ' 👁' : ''}`;
+      // v1.1: 전투 NPC — 그 상태가 된 이유 + 웅크림·엄폐 판정
+      if (n.coverEval && !n.disguised && n.alive) {
+        const crouched = n.crouch > 0.55;
+        const cov = n.inCoverSpot ? (n.coverEval.valid ? ' [엄폐 유효]' : ' [엄폐 무효]') : '';
+        text += `${cov}${crouched ? (n.coverOK ? ' 웅크림✔' : ' 웅크림✖') : ''} · ${n.stateReason || ''}`;
+      }
       if (n.disguise) text += disguiseLabel(n);
       if (el.textContent !== text) el.textContent = text;
       el.dataset.faction = n.trueFaction;

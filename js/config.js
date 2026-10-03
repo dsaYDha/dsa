@@ -4,7 +4,7 @@
 // 단위: 거리 m, 시간 초, 각도는 별도 표기가 없으면 '도(deg)'
 
 export const CONFIG = {
-  version: '1.0.0',
+  version: '1.1.0',
 
   // ------------------------------------------------------------------
   // 키 설정 (KeyboardEvent.code 기준 — 한글 IME 상태와 무관하게 동작)
@@ -134,21 +134,36 @@ export const CONFIG = {
     magSize: 30,
     reloadTime: 2.3,
     range: 300,
-    // 탄퍼짐 (도)
+    // 탄퍼짐 (도) — v1.1: 허리 사격·이동·점프·긴 연사는 잘 안 맞고, 정조준 + 정지 + 짧은 점사일 때만 정확하게
     spread: {
-      hip: 1.1,
-      ads: 0.12,
-      move: 2.2, // 이동 속도에 비례해 더해짐 (최대치)
-      sprint: 3.2,
-      air: 4.5,
-      crouchMul: 0.7,
-      bloomPerShot: 0.32,
-      bloomMax: 3.2,
-      bloomRecovery: 6.5, // 도/초
-      adsBloomMul: 0.45,
+      hip: 1.6, // 허리 사격 기본
+      ads: 0.12, // 정조준 기본
+      move: 3.0, // 이동 속도에 비례해 더해짐 (걷기 속도에서 최대치)
+      adsMoveMul: 0.3, // 정조준 중엔 이동 탄퍼짐의 이 비율만
+      sprint: 4.5,
+      air: 7.0, // 점프·낙하 중
+      crouchMul: 0.75,
+      bloomPerShot: 0.32, // 연사 한 발마다 쌓이는 퍼짐
+      bloomMax: 4.2,
+      bloomRecovery: 7.5, // 도/초 — 쏘지 않을 때만 (bloomDelay 뒤부터)
+      bloomDelay: 0.16, // 마지막 발사 뒤 이만큼 지나야 회복 시작 (예전엔 연사 중에도 회복돼 긴 연사도 퍼지지 않았음)
+      adsBloomMul: 0.45, // 정조준 중 쌓인 퍼짐의 반영 비율
+      centerBias: 0.2, // 탄이 원뿔 가운데로 몰리는 정도 (0 = 원 안 균등 — 예전 코드 고정값 0.45 는 크로스헤어보다 후했음)
     },
-    // 반동 (도) — 시점이 튀었다가 복귀
-    recoil: { pitch: 0.95, yaw: 0.38, adsMul: 0.62, crouchMul: 0.8, recovery: 9 },
+    // 반동 (도) — 시점이 튀었다가 복귀. 연사할수록 세로 반동이 커지고(growth) 좌우로 흔들림(sway)
+    recoil: {
+      pitch: 0.7, // 첫 발 세로 반동
+      growth: 0.08, // 연사 한 발마다 세로 반동 +8% (sprayCap 발까지)
+      sprayCap: 12,
+      yaw: 0.3, // 발마다 무작위 좌우
+      sway: 0.55, // 연사가 길어지면 생기는 좌우 흔들림 (최대, 도/발)
+      swayFrom: 4, // 이 발부터 흔들림
+      adsMul: 0.62,
+      crouchMul: 0.8,
+      recovery: 8, // 복귀 속도 (/초)
+      firingRecoveryMul: 0.45, // 연사 중엔 복귀가 이만큼 느림
+      sprayDecay: 10, // 연사 발수가 쉬는 동안 줄어드는 속도 (발/초 — 연사 간격보다 길게 끊어 쏘면 점점 0, 한 발씩 끊어 쏘면 반동이 쌓이지 않음)
+    },
     adsFovMul: 0.66,
     adsTime: 0.17,
     tracerEvery: 2, // n발마다 예광탄
@@ -184,30 +199,66 @@ export const CONFIG = {
     hearingRadius: 55, // 플레이어 총성 감지 반경
     perceptionInterval: [0.16, 0.26], // NPC 마다 분산되는 시야 판정 주기
     loseSightTime: 4.5,
+    // 공정성 — 등장 유예·반응 지연 (반응 지연 자체는 threat.reactionDelay × difficulty.*.enemyReaction)
     spawnGrace: 1.4, // 등장 직후 명중 불가 유예
     graceRamp: 1.2, // 유예 이후 명중률이 정상까지 오르는 시간
+    graceFireFrac: 0.6, // 유예의 이 비율이 지나야 방아쇠를 당김 (그 전엔 쏘지도 않음)
+    losRamp: { start: 0.45, time: 1.2 }, // 시야를 막 확보했을 때 명중률 배율 start → time 초에 걸쳐 1
+    reacquireReactMul: 0.5, // 시야를 잃었다 다시 찾으면 반응 지연 × 이 배율
     corpseTime: 4.0,
     sinkTime: 1.4,
     shotInterval: 0.115,
     hitDamage: { rifleman: 8, assault: 7, window: 10 },
+    // burst: 점사 발수 / burstPause: 점사 사이 간격 (v1.1: 3~5발 점사 + 짧은 간격으로 통일 — 점사 첫 발이 가장 정확)
     types: {
-      rifleman: { label: '소총수', walk: 1.7, run: 4.3, accuracy: 0.30, burst: [3, 5], burstPause: [0.7, 1.4], preferredRange: [12, 32] },
-      assault: { label: '돌격병', walk: 2.2, run: 5.7, accuracy: 0.22, burst: [4, 7], burstPause: [0.45, 0.9], preferredRange: [4, 14] },
-      window: { label: '창문 사수', walk: 1.5, run: 3.6, accuracy: 0.36, burst: [3, 4], burstPause: [1.0, 1.8], preferredRange: [10, 50] },
+      rifleman: { label: '소총수', walk: 1.7, run: 4.3, accuracy: 0.30, burst: [3, 5], burstPause: [0.6, 1.15], preferredRange: [12, 32] },
+      assault: { label: '돌격병', walk: 2.2, run: 5.7, accuracy: 0.22, burst: [3, 5], burstPause: [0.45, 0.85], preferredRange: [4, 14] },
+      window: { label: '창문 사수', walk: 1.5, run: 3.6, accuracy: 0.36, burst: [3, 5], burstPause: [0.8, 1.45], preferredRange: [10, 50] },
     },
-    // 명중률 보정
+    // 명중률 보정 (적·아군 공통 — 적은 아래 aim 이 점사 감소·상한을 덮어씀, 아군은 그대로)
     accuracy: {
-      nearDist: 8, farDist: 60, farFactor: 0.28,
+      nearDist: 8, farDist: 60, farFactor: 0.28, // 거리 보정: 8m 까지 ×1 → 60m ×0.28 (원거리는 여전히 빗나갈 여지)
       moveFactor: 0.45, // 플레이어가 전력질주하면 이만큼 감소
       crouchFactor: 0.72,
-      burstDecay: 0.07,
+      burstDecay: 0.07, // 점사 한 발마다 감소 (첫 발이 가장 정확)
+      burstFloor: 0.4, // 점사 감소 하한
       movingShooterFactor: 0.65,
       max: 0.85,
     },
+    // v1.1: 적 조준 모델 (적·정체를 드러낸 위장 적만 — 아군 명중률은 그대로)
+    aim: {
+      enemyMul: 1.4, // 적 명중률 전체 배율 (1.5 에서 시작해 실측으로 조정 — 난이도 프리셋 aimBoost 가 1 쪽으로 줄일 수 있음)
+      burstDecay: 0.1, burstFloor: 0.45, // 점사: 첫 발이 가장 정확, 한 발마다 −10% (하한 45%)
+      max: 0.9, // 한 발 명중 확률 상한
+      // 조준 수렴: 같은 대상을 계속 쏘면 탄착이 모임 (start → max, time 초). 대상이 움직이거나(속도·이동 거리) 가려지면 초기화
+      converge: { start: 0.7, max: 1.15, time: 2.6, moveReset: 1.4, speedReset: 2.2, lostReset: 0.8 },
+      // 예측 사격: 같은 방향으로 꾸준히 움직이는 대상의 이동 감점을 comp 만큼 상쇄 (time 초면 완전). 방향을 꺾으면 초기화
+      lead: { comp: 0.55, time: 0.9, turnDeg: 40 },
+    },
+    // v1.1: 엄폐 — '유효한 엄폐'에서만 웅크린다 (위협의 눈높이에서 웅크린 머리·몸통으로 쏜 레이가 막히고, 일어서거나 옆으로 내밀면 위협이 보임)
+    cover: {
+      headH: 1.08, torsoH: 0.72, shoulder: 0.2, // 웅크린 머리·몸통 높이(실제 모델: 머리 중심 1.04m·헬멧 끝 1.21m), 몸통 좌우 판정 간격(m)
+      standEyeH: 1.5, leanDist: 0.62, leanEyeH: 1.42, // 일어서서 / 옆으로 내밀어 쏠 때의 눈·총 높이
+      recheck: 0.45, threatMove: 1.2, // 다시 판정하는 주기(초), 위협이 이만큼 움직이면 바로 다시 판정
+      nearRadius: 15, // 뚫린 곳에서 위협받으면 이 안의 유효 엄폐로 달려감
+      retreatRadius: 28, // 그 안에 없으면 이 안에서 위협 반대쪽 엄폐로 후퇴
+      candidates: 10, // 엄폐 후보를 실제로 판정하는 최대 수
+      selectMargin: 0.14, // 엄폐를 고를 때는 몸 판정점을 이만큼 넓혀서 (위협이 조금 움직여도 유지되는 자리 — 자리 바꾸기 남발 방지)
+      exposedGrace: [0.4, 0.9], // 측면을 잡히면 웅크리지 않고 이만큼 맞서 쏜 뒤 다른 엄폐로
+      blindMove: [3.5, 6], // 가려졌지만 위협이 안 보이는 자리(위협이 숨음)에서 선 채 기다리다 이만큼 지나면 자리 이동
+      peek: [0.9, 1.7], // 일어서거나 옆으로 내밀어 쏘는 시간 (노출을 짧게)
+      hide: [0.8, 2.2], // 숨는 시간 (불규칙)
+      longHideChance: 0.2, longHide: [2.2, 3.6], // 가끔은 오래 숨음
+      afterBurst: [0.1, 0.45], // 점사를 마치고 숨기까지
+      zigzag: { amp: 0.42, period: [0.6, 1.1], speedVar: 0.25 }, // 위협 아래 실외 이동: 좌우로 흔들며(rad, 약 24°) 불규칙한 속도로
+      strafe: { dist: [2.5, 7], pause: [0.15, 0.6], speedMul: 0.9, nearCheck: 1.5 }, // 엄폐가 없을 때 옆으로 움직이며 사격
+    },
+    // v1.1: 조준 회피 — 플레이어가 이만큼 겨누고 있으면 확률로 숨거나 옆으로 비킴 (적이 플레이어를 보고 있을 때만)
+    evade: { aimTime: [0.3, 0.65], chance: 0.55, cooldown: [2.2, 4.0], cone: 4, maxDist: 90 }, // 달리는 중이면 방향을 홱 꺾고 잠깐 더 빨리 (juke)
     accuracyVsNpc: 0.75, // 적이 아군 NPC 를 쏠 때 명중률 배율
     damageVsNpcMul: 1.5, // 적이 아군 NPC 에게 주는 피해 배율
     yieldRadius: 0.75, // 앞에 다른 NPC 가 있으면 감속 (겹쳐 지나가지 않게)
-    coverPeek: [0.9, 2.2], // 엄폐 상태에서 숨어있는 시간
+    coverPeek: [0.9, 2.2], // (아군) 엄폐 상태에서 숨어있는 시간 — 적은 cover.hide
     aggressionTime: [14, 24], // 이 시간 이상 교착되면 우회/돌격 고려
     whizRadius: 2.2,
   },
@@ -435,19 +486,25 @@ export const CONFIG = {
   //   enemyAccuracy: 적 명중률 / enemyReaction: 적 반응 지연(작을수록 빠름) / disguiseMul: 위장 적 비율(fakeAlly·fakeCiv)
   //   skillMul: 숙련도 분포 가중치 배율 [0, 1, 2] (2번째 = 완벽 위장 비율) / observeMul: 관찰로 사실 하나를 알아채는 시간
   //   card: 암구호 카드 표시 허용 (어려움은 무전을 외워서)
+  //   v1.1 — aimBoost: 적 조준 강화(npc.aim — 명중률 배율·수렴·예측)를 얼마나 적용할지 (1 = 전부, 0.5 = 절반)
+  //           handling: 플레이어 무기 다루기 — spreadMul(허리·이동·점프 퍼짐) · bloomMul(연사 퍼짐) · recoilGrowthMul(연사 세로 반동 증가) · swayMul(좌우 흔들림)
+  //           쉬움은 v1.1 변화 폭을 절반 정도로 (적 명중률 배율 ×1.4 → ×1.2, 무기 퍼짐·반동 증가도 절반 안팎)
   difficulty: {
-    easy: { label: '쉬움', desc: '적 명중률·반응 낮음 · 위장 적 적음 · 완벽 위장 드묾 · 관찰 빠름',
-      enemyAccuracy: 0.72, enemyReaction: 1.3, disguiseMul: 0.7, skillMul: [1.4, 0.8, 0.35], observeMul: 0.75, card: true },
+    easy: { label: '쉬움', desc: '적 명중률·반응 낮음 · 위장 적 적음 · 완벽 위장 드묾 · 관찰 빠름 · 총이 덜 튐',
+      enemyAccuracy: 0.72, enemyReaction: 1.3, disguiseMul: 0.7, skillMul: [1.4, 0.8, 0.35], observeMul: 0.75, card: true,
+      aimBoost: 0.5, handling: { spreadMul: 0.75, bloomMul: 0.7, recoilGrowthMul: 0.5, swayMul: 0.5 } },
     normal: { label: '보통', desc: '기본 밸런스',
-      enemyAccuracy: 1, enemyReaction: 1, disguiseMul: 1, skillMul: [1, 1, 1], observeMul: 1, card: true },
+      enemyAccuracy: 1, enemyReaction: 1, disguiseMul: 1, skillMul: [1, 1, 1], observeMul: 1, card: true,
+      aimBoost: 1, handling: { spreadMul: 1, bloomMul: 1, recoilGrowthMul: 1, swayMul: 1 } },
     hard: { label: '어려움', desc: '적 명중률·반응 높음 · 위장 적 많음 · 완벽 위장 잦음 · 관찰 느림 · 암구호 카드 없음',
-      enemyAccuracy: 1.22, enemyReaction: 0.8, disguiseMul: 1.3, skillMul: [0.7, 1.1, 1.7], observeMul: 1.3, card: false },
+      enemyAccuracy: 1.22, enemyReaction: 0.8, disguiseMul: 1.3, skillMul: [0.7, 1.1, 1.7], observeMul: 1.3, card: false,
+      aimBoost: 1, handling: { spreadMul: 1, bloomMul: 1, recoilGrowthMul: 1, swayMul: 1 } },
   },
 
   // 5단계: 게임 모드 — curveStart·curveSpeed: 곡선(과 위협 단계)이 몇 분부터·몇 배 빠르게 흐르는지
   modes: {
     survival: { label: '생존', desc: '쓰러지거나 해임될 때까지 — 1분마다 위협 단계 상승', duration: 0, curveStart: 0, curveSpeed: 1 },
-    timed: { label: '5분 작전', desc: '5분 동안 최고 점수 — 처음부터 위협이 빠르게 오른다', duration: 300, curveStart: 0.5, curveSpeed: 1.4 },
+    timed: { label: '5분 작전', desc: '5분 동안 최고 점수 — 처음부터 위협이 빠르게 오른다', duration: 300, curveStart: 0.5, curveSpeed: 1.2 }, // v1.1: 1.4 → 1.2 (적 조준 강화로 5분을 버티는 비율이 v1.0 수준이 되게)
   },
 
   // ------------------------------------------------------------------
@@ -457,7 +514,7 @@ export const CONFIG = {
     secondsPerLevel: 60,
     maxLevel: 10,
     maxActive: [4, 5, 6, 7, 8, 9, 10, 11, 12, 14], // 레벨별 동시 활성 적 상한
-    accuracyMul: [0.72, 1.5],
+    accuracyMul: [0.65, 1.5], // v1.1: 레벨 1 0.72 → 0.65 (적응 구간은 부드럽게 — 전체 배율 npc.aim.enemyMul 위에서)
     reactionDelay: [[0.55, 0.8], [0.3, 0.45]], // [레벨1 범위], [최고레벨 범위]
     flankChance: [0.12, 0.6],
     waveSize: [[2, 4], [6, 9]],

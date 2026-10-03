@@ -6,7 +6,7 @@ import { openGame, OUT, STEP, check, finish } from './lib.mjs';
 const { page, errors, close } = await openGame('?nolock&gfx=medium');
 console.log('· 시작 화면');
 await page.screenshot({ path: path.join(OUT, 'start.png') });
-check('버전 표시 v1.0', (await page.textContent('#version')) === 'v1.0');
+check('버전 표시 v1.1', (await page.textContent('#version')) === 'v1.1');
 await page.click('#mode-seg button[data-v="survival"]');
 await page.click('#diff-seg button[data-v="normal"]');
 await page.click('#btn-start');

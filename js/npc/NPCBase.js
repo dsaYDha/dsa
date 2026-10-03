@@ -304,6 +304,30 @@ export class NPCBase {
       this._yieldT += dt;
       if (this._yieldT < 1.5) speed *= 0.2;
     } else this._yieldT = 0;
+    // v1.1: 위협 아래 실외 이동 — 좌우로 흔들며(지그재그) 불규칙한 속도로 (this.weave = 흔드는 각도 rad, 0 이면 직선)
+    let mx = dist > 1e-4 ? dx / dist : 0;
+    let mz = dist > 1e-4 ? dz / dist : 0;
+    if (this.weave > 0 && dist > 1.4 && !target.indoor) {
+      if (this._wvW == null) {
+        const Z = CONFIG.npc.cover.zigzag;
+        this._wvW = (Math.PI * 2) / (Z.period[0] + Math.random() * (Z.period[1] - Z.period[0]));
+        this._wvPh = Math.random() * Math.PI * 2;
+      }
+      this._wvPh += dt * this._wvW;
+      const ang = this.weave * Math.sin(this._wvPh);
+      const c = Math.cos(ang);
+      const sn = Math.sin(ang);
+      const nx = mx * c - mz * sn;
+      const nz = mx * sn + mz * c;
+      speed *= 1 + CONFIG.npc.cover.zigzag.speedVar * Math.sin(this._wvPh * 0.61 + 1.3);
+      // 장애물 쪽으로 흔들리면 그 프레임은 직선으로
+      const occ = this.game.world.occupancy;
+      const look = speed * dt + 0.45;
+      if (!occ || occ.isFree(this.position.x + nx * look, this.position.z + nz * look)) {
+        mx = nx;
+        mz = nz;
+      }
+    }
     const step = speed * dt;
     // 높이: 구간 시작점 → 목표 노드 사이를 수평 진행률로 보간 (계단 경사와 일치)
     const segLen = Math.max(0.01, Math.hypot(target.x - this.segFrom.x, target.z - this.segFrom.z));
@@ -313,8 +337,8 @@ export class NPCBase {
       this.pathIdx++;
       this.segFrom.copy(this.position);
     } else {
-      this.position.x += (dx / dist) * step;
-      this.position.z += (dz / dist) * step;
+      this.position.x += mx * step;
+      this.position.z += mz * step;
       const prog = 1 - (dist - step) / segLen;
       this.position.y = this.segFrom.y + (target.y - this.segFrom.y) * THREE.MathUtils.clamp(prog, 0, 1);
       this.targetYaw = Math.atan2(dx, dz);

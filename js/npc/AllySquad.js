@@ -10,6 +10,7 @@ import { describeLocation, line } from '../dialogue/Callouts.js';
 const CALLSIGNS = ['알파', '브라보', '찰리', '델타', '에코', '폭스'];
 let NEXT = 0;
 const _v = new THREE.Vector3();
+const _e = new THREE.Vector3();
 
 export class AllySquad {
   constructor(game) {
@@ -165,17 +166,20 @@ export class AllySquad {
     const stop = R.range(A.advanceStopDist[0], A.advanceStopDist[1]);
     const anchor = new THREE.Vector3(ep.x + away.x * stop, 0, ep.z + away.z * stop);
     const used = new Set();
+    const eye = _e.set(ep.x, ep.y + 1.62, ep.z);
     for (const m of this.free) {
       if (m.state === 'clear' && m.clearSeq) continue;
-      const node = this._coverNear(m, anchor, ep, used);
-      if (node) {
+      const pick = this._coverNear(m, anchor, eye, used);
+      if (pick) {
+        const node = pick.node;
         used.add(node.id);
-        if (node.type === 'cover') {
+        // v1.1: 적 눈높이에서 실제로 가려지는 엄폐(레이 판정)일 때만 '엄폐'로, 아니면 그냥 자리 잡기
+        if (pick.valid) {
           m._releaseCover();
           node.reservedBy = m;
           m.coverNode = node;
-          m.orderMove(node.id, 'cover');
-        } else m.orderMove(node.id, 'hold');
+          m.orderMove(node.id, 'cover', '분대 전진 → 엄폐 (적 기준 유효)');
+        } else m.orderMove(node.id, 'hold', '분대 전진 → 자리 잡기');
       }
     }
     if (game.time - this.engagedT > 20) {
@@ -184,27 +188,41 @@ export class AllySquad {
     }
   }
 
-  // 앵커 근처의 엄폐 지점 (적 방향으로 보호되는 곳) 또는 일반 노드
-  _coverNear(m, anchor, enemyPos, used) {
+  // 앵커 근처의 엄폐 지점 (적 눈높이에서 실제로 가려지는 곳 — v1.1 레이 판정) 또는 일반 노드
+  // @returns {null | { node, valid }}
+  _coverNear(m, anchor, enemyEye, used) {
     const nav = this.game.world.nav;
+    const npcs = this.game.npcs;
     const cands = nav.inRadius(anchor.x, 0, anchor.z, 11, (n) => !n.indoor && !used.has(n.id) && (n.reservedBy == null || n.reservedBy === m || !n.reservedBy.alive));
-    let best = null;
-    let bestScore = -Infinity;
+    const scored = [];
     for (const n of cands) {
-      const dx = enemyPos.x - n.x;
-      const dz = enemyPos.z - n.z;
+      const dx = enemyEye.x - n.x;
+      const dz = enemyEye.z - n.z;
       const d = Math.hypot(dx, dz) || 1;
       let score = -Math.hypot(n.x - anchor.x, n.z - anchor.z) * 0.4 + R.range(0, 1.5);
-      if (n.type === 'cover' && n.coverDir) {
-        const prot = (n.coverDir.x * dx + n.coverDir.z * dz) / d;
-        if (prot > 0.4) score += 4 + prot * 2;
-      }
+      // 저장된 방향은 판정 순서 참고용 (실제 엄폐 여부는 아래 레이 판정)
+      if (n.type === 'cover' && n.coverDir) score += ((n.coverDir.x * dx + n.coverDir.z * dz) / d) * 1.5;
       // 다른 NPC 와 겹치지 않게
-      for (const o of this.game.npcs.list) if (o !== m && o.alive && Math.hypot(o.position.x - n.x, o.position.z - n.z) < 1.6) score -= 4;
+      for (const o of npcs.list) if (o !== m && o.alive && Math.hypot(o.position.x - n.x, o.position.z - n.z) < 1.6) score -= 4;
       score -= this._playerSpacePenalty(n);
-      if (score > bestScore) {
-        bestScore = score;
-        best = n;
+      scored.push({ n, score });
+    }
+    scored.sort((a, b) => b.score - a.score);
+    // 점수 높은 엄폐 노드 몇 개를 실제로 판정해, 유효하면 큰 가산점
+    let best = null;
+    let bestScore = -Infinity;
+    let checked = 0;
+    for (const { n, score } of scored) {
+      let sc = score;
+      let valid = false;
+      if (n.type === 'cover' && checked < 6) {
+        checked++;
+        valid = npcs.nodeCover(n, enemyEye, CONFIG.npc.cover.selectMargin).valid;
+        if (valid) sc += 6;
+      }
+      if (sc > bestScore) {
+        bestScore = sc;
+        best = { node: n, valid };
       }
     }
     return best;

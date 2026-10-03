@@ -1,10 +1,13 @@
 // 5단계 난이도 — 시간 구간별 난이도 곡선(config.curve) + 난이도 프리셋(config.difficulty) + 게임 모드(config.modes)
 // · 곡선: 0~1분 적응(적 위주·위장 없음) → 1~3분 위장 등장(장비 단서 많음) → 3~6분 혼전(섞인 습격·숙련 1 증가)
 //         → 6분~ 고강도(완벽 위장 등장, 그 값으로 유지). 구간 안에서는 값이 일정하다(경계에서 바뀜)
-// · 위협 단계(적의 수·명중률·반응·습격 규모)는 곡선 시간 1분마다 1단계 — 5분 작전은 곡선이 0.5분부터 1.8배 빠르게 흐름
+// · 위협 단계(적의 수·명중률·반응·습격 규모)는 곡선 시간 1분마다 1단계 — 5분 작전은 곡선이 0.5분부터 1.2배 빠르게 흐름
 // · 프리셋 배율: 적 명중률·반응, 위장 비율, 숙련도 분포(완벽 위장 비율), 관찰 속도, 암구호 카드 허용
+//   + v1.1: 적 조준 강화 적용 비율(aimBoost), 플레이어 무기 다루기(handling — 퍼짐·연사 반동)
 // 디렉터(SpawnDirector)가 매 프레임 sample() 결과(director.curve)를 읽어 출현 비율·위장·오판 유도 행동을 정한다
 import { CONFIG } from '../config.js';
+
+const NO_HANDLING = { spreadMul: 1, bloomMul: 1, recoilGrowthMul: 1, swayMul: 1 };
 
 export class Difficulty {
   constructor(game) {
@@ -45,6 +48,9 @@ export class Difficulty {
   get enemyReaction() { return this.preset.enemyReaction; }
   get observeMul() { return this.preset.observeMul; }
   get cardAllowed() { return this.preset.card !== false; }
+  // v1.1: 적 조준 강화(npc.aim)를 얼마나 적용할지 (쉬움 0.5) / 플레이어 무기 다루기 배율
+  get aimBoost() { return this.preset.aimBoost ?? 1; }
+  get handling() { return this.preset.handling || NO_HANDLING; }
 
   /** 진행 시간(초) → 곡선 시간(분) */
   curveMinutes(elapsed) {
