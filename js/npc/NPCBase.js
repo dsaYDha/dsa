@@ -413,6 +413,16 @@ export class NPCBase {
   onDeath() {}
 
   // ------------------------------------------------------------------
+  // 5단계 LOD: 멀거나 화면 밖이면 애니메이션을 몇 프레임에 한 번 (누적 dt 로) — NPCManager 가 animEvery 를 정함
+  _animDue(dt) {
+    this._animAcc = (this._animAcc || 0) + dt;
+    this._animTick = ((this._animTick || 0) + 1) % (this.animEvery || 1);
+    if (this._animTick !== 0) return 0;
+    const a = this._animAcc;
+    this._animAcc = 0;
+    return a;
+  }
+
   update(dt) {
     if (this.dying) {
       if (this.rig.card) this.rig.setCard(false);
@@ -423,9 +433,16 @@ export class NPCBase {
         this.root.position.y = this.position.y - t * 0.6;
         if (t >= 1) this.removed = true;
       }
-      this.rig.animate(dt, {});
+      const ad = this._animDue(dt);
+      if (ad > 0) this.rig.animate(ad, {});
       return;
     }
+    // 5단계 LOD: 멀고(45m+) 화면 밖인 인물은 AI 를 2프레임에 한 번 (누적 dt — 이동·타이머 결과는 같음)
+    this._thinkAcc = (this._thinkAcc || 0) + dt;
+    this._thinkTick = ((this._thinkTick || 0) + 1) % (this.thinkEvery || 1);
+    if (this._thinkTick !== 0) return;
+    dt = this._thinkAcc;
+    this._thinkAcc = 0;
     this.think(dt);
     this._updateTalkPose(dt);
     // 회전 보간
@@ -439,11 +456,13 @@ export class NPCBase {
 
     this.root.position.copy(this.position);
     this.root.rotation.y = this.yaw;
-    this.rig.animate(dt, {
-      speed: this.curSpeed, aim: this.aim, aimPitch: this.aimPitch, crouch: this.crouch, handsUp: this.handsUp, cower: this.cower,
-      hideHands: this.hideHands, handsMode: this.handsMode, shock: this.shock, tear: this.tear, reach: this.reach, radioTalk: this.radioTalk,
-      handsLag: this.handsLag, lowered: this.lowered, showCard: this.showCard,
-    });
+    const ad = this._animDue(dt);
+    if (ad <= 0) return;
+    const ap = this._animParams || (this._animParams = {});
+    ap.speed = this.curSpeed; ap.aim = this.aim; ap.aimPitch = this.aimPitch; ap.crouch = this.crouch; ap.handsUp = this.handsUp; ap.cower = this.cower;
+    ap.hideHands = this.hideHands; ap.handsMode = this.handsMode; ap.shock = this.shock; ap.tear = this.tear; ap.reach = this.reach; ap.radioTalk = this.radioTalk;
+    ap.handsLag = this.handsLag; ap.lowered = this.lowered; ap.showCard = this.showCard;
+    this.rig.animate(ad, ap);
   }
 
   think() {}

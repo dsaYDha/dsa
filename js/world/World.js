@@ -67,12 +67,7 @@ export class World {
     this.root.traverse((o) => {
       if (o.geometry) o.geometry.dispose();
     });
-    if (this.atmosphere) {
-      const a = this.atmosphere;
-      this.scene.remove(a.sky, a.hemi, a.sun, a.sun.target, a.smoke.mesh, a.flames.mesh, a.embers.mesh, a.ash.mesh);
-      for (const s of a.fireLights) this.scene.remove(s.light);
-      this.scene.children.filter((c) => c.isInstancedMesh && c.material === this.materialSet.materials.skyline).forEach((c) => this.scene.remove(c));
-    }
+    if (this.atmosphere) this.atmosphere.dispose();
     this.root = null;
     this.ready = false;
   }
@@ -91,7 +86,15 @@ export class World {
    * 진입 가능 건물의 내벽 안쪽이면서 옥상 높이보다 낮으면 실내
    */
   isIndoors(pos) {
-    return this.getIndoorInfo(pos) !== null;
+    // 방까지 찾지 않는 가벼운 판정 (NPC 마다 매 프레임 호출)
+    if (!this.enterable) return false;
+    for (const b of this.enterable) {
+      const r = b.inner;
+      if (pos.x < r.minX || pos.x > r.maxX || pos.z < r.minZ || pos.z > r.maxZ) continue;
+      if (pos.y < -0.5 || pos.y > b.roofY - 0.3) continue;
+      return true;
+    }
+    return false;
   }
 
   /** @returns {null | { building, floor, room }} */

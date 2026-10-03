@@ -149,7 +149,7 @@ export class AllySquad {
     this.objective = { kind: 'regroup' };
     // 3단계: 플레이어 곁으로 오는 김에 한 명이 동행 엄호로 붙기도 함 (위장 적의 '동행'과 구분되지 않게)
     const D = CONFIG.disguise;
-    if (game.director.threat >= D.fromThreat && alive.length >= 2 && !this.alive.some((m) => m.isEscorting) && R.chance(D.decoy.regroupEscortChance)) {
+    if (game.director.curve.decoyAlly > 0 && alive.length >= 2 && !this.alive.some((m) => m.isEscorting) && R.chance(D.decoy.regroupEscortChance)) {
       this.detachEscort(R.range(...D.decoy.escortTime));
     }
     this._regroup();

@@ -2,7 +2,7 @@
 // 지평선 폭발 섬광(멀리서 울리는 포성은 AudioSystem 이 담당)
 import * as THREE from 'three';
 import { CONFIG } from '../config.js';
-import { ParticleSystem } from '../fx/Particles.js';
+import { ParticleSystem, FX } from '../fx/Particles.js';
 import { RNG, gameRand } from '../core/Random.js';
 
 const SKY_VERT = /* glsl */ `
@@ -108,6 +108,8 @@ export class Atmosphere {
     this.sun = new THREE.DirectionalLight(A.sunColor, A.sunIntensity);
     const sh = this.sun.shadow;
     const R = CONFIG.render.shadowRange;
+    this.shadowRange = R;
+    this.shadowMapSize = CONFIG.render.shadowMapSize;
     sh.mapSize.set(CONFIG.render.shadowMapSize, CONFIG.render.shadowMapSize);
     sh.camera.left = -R;
     sh.camera.right = R;
@@ -151,6 +153,7 @@ export class Atmosphere {
     for (const f of fires) f.t = this.rng.range(0, 1);
 
     this._ashInit = false;
+    this.farDetail = true;
     this.nextFlash = this.rng.range(...A.horizonFlashInterval) * 0.5;
     this.flashT = 0;
     this.onDistantExplosion = null; // (방위 벡터, 지연초, 세기) => void
@@ -159,6 +162,9 @@ export class Atmosphere {
 
   // 원경 스카이라인 (맵 밖 폐허 실루엣)
   buildSkyline(materials) {
+    // 5단계: 창문 불빛 깜박임 대상 (건물 정면 창 아틀라스의 발광)
+    this.windowMats = ['winBrick', 'winPlaster', 'winConcrete'].map((k) => materials[k]).filter(Boolean);
+    this.windowBase = this.windowMats.map((m) => m.emissiveIntensity);
     const geo = new THREE.BoxGeometry(1, 1, 1);
     geo.translate(0, 0.5, 0);
     geo.setAttribute('aInterior', new THREE.Float32BufferAttribute(new Float32Array(geo.attributes.position.count), 1));
@@ -182,6 +188,7 @@ export class Atmosphere {
     im.castShadow = false;
     im.receiveShadow = false;
     this.scene.add(im);
+    this.skyline = im;
   }
 
   update(dt, camera, playerPos, indoorFactor = 0) {
@@ -191,8 +198,8 @@ export class Atmosphere {
     this.indoorFactor = indoorFactor;
 
     // 그림자 카메라가 플레이어를 따라감 (텍셀 단위로 스냅해 떨림 감소)
-    const R = CONFIG.render.shadowRange;
-    const texel = (R * 2) / CONFIG.render.shadowMapSize;
+    const R = this.shadowRange;
+    const texel = (R * 2) / this.shadowMapSize;
     const tx = Math.round(playerPos.x / texel) * texel;
     const tz = Math.round(playerPos.z / texel) * texel;
     this.sun.target.position.set(tx, 0, tz);
@@ -204,6 +211,7 @@ export class Atmosphere {
     this.wind.z = 0.35 + Math.cos(this.time * 0.05) * 0.4;
 
     this._updateFires(dt, playerPos);
+    this._updateFlicker(dt);
     this._updateColumns(dt);
     this._updateAsh(dt, camera);
     this._updateFlashes(dt);
@@ -238,7 +246,7 @@ export class Atmosphere {
     for (const slot of this.fireLights) {
       if (!slot.fire) continue;
       const t = this.time * 9 + slot.fire.x;
-      const flick = 0.75 + Math.sin(t) * 0.12 + Math.sin(t * 2.3 + 1.7) * 0.08 + gameRand.range(-0.08, 0.08);
+      const flick = (0.75 + Math.sin(t) * 0.12 + Math.sin(t * 2.3 + 1.7) * 0.08 + gameRand.range(-0.08, 0.08)) * (1 - (this.lightDip || 0) * 0.5);
       slot.light.intensity = A.fireLightIntensity * slot.fire.size * flick;
     }
     // 불꽃 파티클 (거리에 따라 방출량 조절)
@@ -272,9 +280,33 @@ export class Atmosphere {
     }
   }
 
+  // 5단계: 조명 깜박임 — 불 켜진 창이 가끔 흔들리듯 어두워졌다 돌아옴 (전력 불안정·불길), 불빛 점광원도 함께 출렁임
+  _updateFlicker(dt) {
+    if (!this.windowMats) return;
+    this._flickT = (this._flickT ?? 3) - dt;
+    if (this._flickT <= 0) {
+      this._flickT = gameRand.range(3.5, 10);
+      this._dip = gameRand.range(0.3, 0.65);
+      this._dipT = gameRand.range(0.12, 0.4);
+      this._dipDur = this._dipT;
+    }
+    let dip = 0;
+    if (this._dipT > 0) {
+      this._dipT -= dt;
+      // 툭툭 끊기듯 두세 번
+      const k = 1 - this._dipT / this._dipDur;
+      dip = this._dip * (Math.sin(k * Math.PI * 5) > 0 ? 1 : 0.35);
+    }
+    const t = this.time;
+    const wobble = 0.93 + Math.sin(t * 11.3) * 0.035 + Math.sin(t * 4.1 + 2) * 0.035;
+    for (let i = 0; i < this.windowMats.length; i++) this.windowMats[i].emissiveIntensity = this.windowBase[i] * wobble * (1 - dip);
+    this.lightDip = dip;
+  }
+
   _updateColumns(dt) {
     for (const c of this.columns) {
       const far = c.scale > 1;
+      if (far && !this.farDetail) continue; // 그래픽 '낮음': 맵 밖 먼 연기 기둥 생략
       c.t += dt * (far ? 3.5 : 6);
       while (c.t > 1) {
         c.t -= 1;
@@ -291,9 +323,9 @@ export class Atmosphere {
   }
 
   _updateAsh(dt, camera) {
-    // 카메라 주변 상자에서 재가 떨어짐
+    // 카메라 주변 상자에서 재가 떨어짐 (그래픽 프리셋의 파티클 비율만큼)
     const p = camera.position;
-    const want = CONFIG.atmosphere.ashCount;
+    const want = Math.round(CONFIG.atmosphere.ashCount * FX.particles);
     const live = this.ash.liveCount;
     const spawn = Math.min(want - live, Math.ceil(dt * want / 6) + (this._ashInit ? 0 : want));
     this._ashInit = true;
@@ -304,7 +336,7 @@ export class Atmosphere {
         vx: gameRand.range(-0.3, 0.3), vy: gameRand.range(-0.6, -0.25), vz: gameRand.range(-0.3, 0.3),
         life: gameRand.range(5, 9), size: ember ? 0.05 : gameRand.range(0.04, 0.08), sizeEnd: 0.03,
         color: ember ? [1, 0.5, 0.2] : [0.55, 0.52, 0.5], alpha: ember ? 0.9 : 0.55, fadeIn: 0.2, drag: 0.8,
-        rotSpeed: gameRand.range(-2, 2),
+        rotSpeed: gameRand.range(-2, 2), keep: true,
       });
     }
   }
@@ -325,6 +357,51 @@ export class Atmosphere {
     const f = this.flashT * this.flashT;
     this.skyUniforms.flash.value = f;
     this.hemi.intensity = A.hemiIntensity * (1 + f * 0.35);
+  }
+
+  /** 5단계 그래픽 프리셋: 그림자·먼 풍경 */
+  setQuality(G) {
+    this.sun.castShadow = !!G.shadows;
+    this.shadowRange = G.shadowRange;
+    const sh = this.sun.shadow;
+    sh.camera.left = -G.shadowRange;
+    sh.camera.right = G.shadowRange;
+    sh.camera.top = G.shadowRange;
+    sh.camera.bottom = -G.shadowRange;
+    sh.camera.updateProjectionMatrix();
+    if (this.shadowMapSize !== G.shadowMapSize) {
+      this.shadowMapSize = G.shadowMapSize;
+      sh.mapSize.set(G.shadowMapSize, G.shadowMapSize);
+      if (sh.map) {
+        sh.map.dispose();
+        sh.map = null;
+      }
+    }
+    this.farDetail = G.viewDistance > 300;
+    if (this.skyline) this.skyline.visible = this.farDetail;
+  }
+
+  // 5단계: 시드를 바꿔 다시 만들 때 GPU 자원까지 정리
+  dispose() {
+    const s = this.scene;
+    s.remove(this.sky, this.hemi, this.sun, this.sun.target);
+    this.sky.geometry.dispose();
+    this.sky.material.dispose();
+    for (const p of [this.smoke, this.flames, this.embers, this.ash]) {
+      s.remove(p.mesh);
+      p.dispose();
+    }
+    for (const f of this.fireLights) {
+      s.remove(f.light);
+      f.light.dispose();
+    }
+    if (this.skyline) {
+      s.remove(this.skyline);
+      this.skyline.geometry.dispose();
+      this.skyline.dispose();
+    }
+    this.sun.dispose();
+    this.hemi.dispose();
   }
 
   // 큰 폭발(근거리) 등 외부 요청용 — 2단계 이후 확장 지점

@@ -329,6 +329,7 @@ export class Soldier extends NPCBase {
     this.shotsInPeek++;
     this.gunSound(_muzzle);
     game.effects.enemyMuzzle(_muzzle, _dir);
+    if (this.shotsFired % 3 === 0) game.effects.muzzleSmoke(_muzzle, _dir, 0.8);
     game.events.emit(Events.WEAPON_FIRED, { shooter: this, isPlayer: false, position: _muzzle.clone(), direction: _dir.clone() });
 
     // 총구에서 대상까지 막혀 있으면 엄폐물에 맞음
@@ -355,6 +356,15 @@ export class Soldier extends NPCBase {
     if (res) {
       game.effects.impact(res.point, res.normal, res.surface, res.distance > 4);
       game.audio.impact(res.point, res.surface);
+      // 5단계: 플레이어 바로 옆에 맞은 탄 — 흙먼지 + 화면 흔들림 (Game 이 NEAR_IMPACT 로 흔들림 처리)
+      if (t === 'player') {
+        const d = res.point.distanceTo(game.player.eye);
+        if (d < 3.2) {
+          game.effects.nearImpact(res.point, res.normal, res.surface);
+          game.audio.nearImpact(res.point);
+          game.events.emit(Events.NEAR_IMPACT, { point: res.point, distance: d });
+        }
+      }
     }
     if (R.chance(0.45)) game.effects.tracer(_muzzle, end, this.isEnemyTracer);
     const travel = res ? res.distance : dist + 45;

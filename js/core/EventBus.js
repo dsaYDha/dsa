@@ -31,6 +31,9 @@ export const Events = {
   DIALOGUE_CLOSE: 'dialogue:close', // { npc, reason: 'timeout'|'key'|'fired'|'lost'|'dead'|'revealed'|'player' }
   COUNTERSIGN_CHANGED: 'countersign:changed', // { current: {challenge, reply}, previous, indoorBase, prevIndoorBase, initial }
   DIRECTOR_PHASE: 'director:phase',
+  CURVE_PHASE: 'director:curve', // 5단계: 난이도 곡선 구간 변경 { index, name, note }
+  NEAR_IMPACT: 'bullet:nearImpact', // 5단계: 빗나간 적 탄이 플레이어 가까이에 맞음 { point, distance }
+  RUN_END: 'game:runEnd', // 5단계: 판 종료 { reason: 'killed'|'dismissed'|'complete' }
   THREAT_LEVEL: 'director:threat',
   GAME_STATE: 'game:state',
 };

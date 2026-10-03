@@ -131,6 +131,7 @@ export class Weapon {
     game.weaponView.onFire();
     game.weaponView.getMuzzleWorld(_muzzle);
     game.effects.playerMuzzleLight(_muzzle);
+    if (R.chance(0.6)) game.effects.muzzleSmoke(_muzzle, _dir, 1);
     if (this.shotsFired % cfg.tracerEvery === 0) game.effects.tracer(_muzzle, result.point, false);
     game.events.emit(Events.WEAPON_FIRED, { shooter: 'player', isPlayer: true, position: origin, direction: _dir.clone() });
   }

@@ -80,6 +80,8 @@ export class HUD {
       dlgHint: $('dialog-hint'),
       csCard: $('cs-card'),
       csBody: $('cs-body'),
+      mode: $('hud-mode'),
+      phase: $('hud-phase'),
     };
     // 나침반 눈금 (15도 간격, 8방위 라벨)
     this.compassMarks = [];
@@ -131,7 +133,14 @@ export class HUD {
       if (e.sourcePosition) this.addDamageDir(e.sourcePosition);
       game.audio.hurt();
     });
-    ev.on(Events.THREAT_LEVEL, (e) => this.showBanner(`위협 단계 ${e.level}`, '적의 수와 정확도가 올라갑니다'));
+    ev.on(Events.THREAT_LEVEL, (e) => {
+      if (!this._phaseBannerAt || game.time - this._phaseBannerAt > 1) this.showBanner(`위협 단계 ${e.level}`, '적의 수와 정확도가 올라갑니다');
+    });
+    // 5단계: 난이도 곡선 구간이 바뀜 (위장 등장·혼전·고강도)
+    ev.on(Events.CURVE_PHASE, (e) => {
+      this._phaseBannerAt = game.time;
+      setTimeout(() => this.showBanner(e.name, e.note), 50);
+    });
     // 3단계
     ev.on(Events.DISGUISE_SPAWNED, () => {
       if (this.disguiseHinted) return;
@@ -207,12 +216,12 @@ export class HUD {
     el.dlgTimer.style.width = `${(frac * 100).toFixed(1)}%`;
   }
 
-  // 4단계 암구호 카드
+  // 4단계 암구호 카드 (5단계: 난이도 '어려움'은 항상 숨김)
   _updateCountersign(dt) {
     const g = this.game;
     const cs = g.countersign;
     const el = this.el;
-    const show = !!g.settings.countersignCard && !!cs.current;
+    const show = !!g.settings.countersignCard && g.difficulty.cardAllowed && !!cs.current;
     el.csCard.classList.toggle('hidden', !show);
     this.csFlashT = Math.max(0, (this.csFlashT || 0) - dt);
     el.csCard.classList.toggle('flash', this.csFlashT > 0);
@@ -287,6 +296,7 @@ export class HUD {
     this.el.dlgMenu.classList.add('hidden');
     this.el.dlgHint.classList.remove('show');
     this.disguiseHinted = false;
+    this._phaseBannerAt = 0;
     this._csKey = '';
     this._dlgKey = '';
     this.csFlashT = 0;
@@ -404,7 +414,7 @@ export class HUD {
     const gap = 3 + (Math.tan(spread) / Math.tan(halfFov)) * (window.innerHeight / 2);
     this.el.crosshair.style.setProperty('--gap', `${Math.min(140, gap).toFixed(1)}px`);
     const obs = game.observation;
-    this.el.crosshair.style.opacity = (p.sprinting ? 0.15 : (1 - w.adsT * 0.85) * (1 - obs.t)).toFixed(2);
+    this.el.crosshair.style.opacity = (!p.alive ? 0 : p.sprinting ? 0.15 : (1 - w.adsT * 0.85) * (1 - obs.t)).toFixed(2);
     this._updateObservation(obs);
     this._updateDialogue();
     this._updateCountersign(dt);
@@ -414,7 +424,20 @@ export class HUD {
 
     this._set('score', this.el.score, s.score.toLocaleString('ko-KR'));
     this._set('kills', this.el.kills, `사살 ${s.kills}`);
-    this._set('time', this.el.time, fmtTime(game.runTime));
+    // 5단계: 5분 작전은 남은 시간을 거꾸로 셈
+    const diff = game.difficulty;
+    const dur = diff.mode.duration;
+    if (dur > 0) {
+      const left = Math.max(0, dur - game.runTime);
+      this._set('time', this.el.time, fmtTime(Math.ceil(left)));
+      this.el.time.classList.add('countdown');
+      this.el.time.classList.toggle('urgent', left < 30);
+    } else {
+      this._set('time', this.el.time, fmtTime(game.runTime));
+      this.el.time.classList.remove('countdown', 'urgent');
+    }
+    this._set('mode', this.el.mode, `${diff.mode.label} · ${diff.preset.label}`);
+    this._set('phase', this.el.phase, game.director.curve ? `▸ ${game.director.curve.name}` : '');
     const lvl = game.director.threat;
     this._set('threat', this.el.threat, `위협 단계 ${lvl}`);
     if (this._last.pips !== lvl) {

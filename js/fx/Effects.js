@@ -11,6 +11,7 @@ const _m = new THREE.Matrix4();
 const _s = new THREE.Vector3();
 const _z = new THREE.Vector3(0, 0, 1);
 const _p = new THREE.Vector3();
+const _spin = new THREE.Quaternion();
 
 const DUST = {
   concrete: [0.42, 0.4, 0.37],
@@ -26,7 +27,7 @@ export class Effects {
     this.scene = scene;
     this.dust = new ParticleSystem({ capacity: 500, texture: textures.smoke, fog, renderOrder: 5 });
     this.sparks = new ParticleSystem({ capacity: 400, texture: textures.spark, additive: true, fog, renderOrder: 6 });
-    this.flashes = new ParticleSystem({ capacity: 60, texture: textures.muzzle, additive: true, fog, renderOrder: 6 });
+    this.flashes = new ParticleSystem({ capacity: 60, texture: textures.muzzle, additive: true, fog, renderOrder: 6, scalable: false });
     scene.add(this.dust.mesh, this.sparks.mesh, this.flashes.mesh);
 
     // 탄흔 데칼 풀
@@ -102,7 +103,7 @@ export class Effects {
       this.dust.emit({
         x: pos.x + R.range(-0.15, 0.15), y: pos.y + R.range(-0.1, 0.15), z: pos.z + R.range(-0.15, 0.15),
         vx: R.range(-1.2, 1.2), vy: R.range(0.5, 2.0), vz: R.range(-1.2, 1.2),
-        life: R.range(0.8, 1.4), size: R.range(0.05, 0.08), sizeEnd: 0.05, color: [c.r, c.g, c.b], alpha: 1, fadeIn: 0.01, gravity: 4, drag: 2.5,
+        life: R.range(0.8, 1.4), size: R.range(0.05, 0.08), sizeEnd: 0.05, color: [c.r, c.g, c.b], alpha: 1, fadeIn: 0.01, gravity: 4, drag: 2.5, keep: true,
       });
     }
   }
@@ -142,8 +143,7 @@ export class Effects {
   addDecal(point, normal, size) {
     _p.copy(point).addScaledVector(normal, 0.012);
     _q.setFromUnitVectors(_z, normal);
-    const spin = new THREE.Quaternion().setFromAxisAngle(_z, R.range(0, Math.PI * 2));
-    _q.multiply(spin);
+    _q.multiply(_spin.setFromAxisAngle(_z, R.range(0, Math.PI * 2)));
     _s.set(size, size, size);
     _m.compose(_p, _q, _s);
     this.decals.setMatrixAt(this.decalCursor, _m);
@@ -186,6 +186,36 @@ export class Effects {
     t.mesh.position.copy(from);
     // 상자는 로컬 -z 로 뻗어 있으므로 +z 가 진행 방향을 보게 하면 꼬리가 뒤로 늘어진다
     t.mesh.lookAt(_p.copy(from).add(t.dir));
+  }
+
+  // 5단계: 총구 연기 (옅은 회색 한 줄기 — 연사하면 쌓임)
+  muzzleSmoke(pos, dir, strength = 1) {
+    this.dust.emit({
+      x: pos.x + dir.x * 0.15, y: pos.y + dir.y * 0.15, z: pos.z + dir.z * 0.15,
+      vx: dir.x * R.range(0.4, 0.9) + R.range(-0.1, 0.1), vy: R.range(0.25, 0.55), vz: dir.z * R.range(0.4, 0.9) + R.range(-0.1, 0.1),
+      life: R.range(0.9, 1.6), size: R.range(0.06, 0.1), sizeEnd: R.range(0.45, 0.7),
+      color: [0.62, 0.6, 0.57], alpha: 0.13 * strength, fadeIn: 0.08, drag: 1.6, gravity: -0.15, rotSpeed: R.range(-1, 1),
+    });
+  }
+
+  // 5단계: 플레이어 가까이 맞은 탄 — 흙먼지가 크게 튐
+  nearImpact(point, normal, surface = 'concrete') {
+    const col = DUST[surface] || DUST.concrete;
+    for (let i = 0; i < 7; i++) {
+      this.dust.emit({
+        x: point.x, y: point.y + 0.05, z: point.z,
+        vx: normal.x * R.range(1, 3) + R.range(-1.2, 1.2), vy: normal.y * R.range(1, 2.5) + R.range(0.6, 2.2), vz: normal.z * R.range(1, 3) + R.range(-1.2, 1.2),
+        life: R.range(0.7, 1.4), size: R.range(0.15, 0.3), sizeEnd: R.range(0.8, 1.3),
+        color: col, alpha: 0.75, fadeIn: 0.04, drag: 2.2, gravity: 0.6, keep: i < 3,
+      });
+    }
+    for (let i = 0; i < 6; i++) {
+      this.dust.emit({
+        x: point.x, y: point.y, z: point.z,
+        vx: normal.x * 3 + R.range(-2.5, 2.5), vy: R.range(1.5, 4.5), vz: normal.z * 3 + R.range(-2.5, 2.5),
+        life: R.range(0.5, 0.9), size: 0.04, sizeEnd: 0.035, color: [col[0] * 0.45, col[1] * 0.45, col[2] * 0.45], alpha: 1, fadeIn: 0.01, gravity: 13, drag: 0.2,
+      });
+    }
   }
 
   // 적 총구 화염 (빛 없이 스프라이트만)
@@ -245,12 +275,24 @@ export class Effects {
     }
   }
 
+  // 시드를 바꿔 월드를 다시 만들 때 정리 (5단계: 파티클·예광탄·재질까지 모두 해제)
   dispose() {
     const s = this.scene;
     s.remove(this.dust.mesh, this.sparks.mesh, this.flashes.mesh, this.decals, this.muzzleLight);
     for (const t of this.tracers) s.remove(t.mesh);
     for (const d of this.drops) s.remove(d.mesh);
+    for (const p of [this.dust, this.sparks, this.flashes]) p.dispose();
+    this.decals.geometry.dispose();
+    this.decals.material.dispose();
     this.decals.dispose();
+    const t0 = this.tracers[0];
+    if (t0) {
+      t0.mesh.geometry.dispose();
+      for (const t of this.tracers.slice(0, 2)) t.mesh.material.dispose();
+    }
+    if (this.drops[0]) this.drops[0].mesh.geometry.dispose();
+    this.dropMat.dispose();
+    this.muzzleLight.dispose();
   }
 
   clear() {

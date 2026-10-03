@@ -25,6 +25,7 @@ export class VoiceSystem {
     this.recent = new Map(); // 문장 → 마지막 출력 시각
     this.history = []; // 최근 출력 기록 (디버그·테스트용)
     this.speechEnabled = false;
+    this.speechVolume = 1; // 5단계: 설정의 전체 × 음성 음량
     this.koVoice = null;
     this.speechAvailable = false;
     this._initSpeech();
@@ -94,9 +95,12 @@ export class VoiceSystem {
 
   update(dt) {
     this.time += dt;
-    for (const l of [...this.lines]) if (this.time >= l.until) this._expire(l);
+    for (let i = this.lines.length - 1; i >= 0; i--) if (this.time >= this.lines[i].until) this._expire(this.lines[i]);
     // 큐에서 오래 기다린 일반 대사는 버림 (상황이 지나감)
-    this.queue = this.queue.filter((q) => q.priority >= 2 || this.time - q.queuedAt < 4);
+    for (let i = this.queue.length - 1; i >= 0; i--) {
+      const q = this.queue[i];
+      if (q.priority < 2 && this.time - q.queuedAt >= 4) this.queue.splice(i, 1);
+    }
     while (this.lines.length < this.maxLines && this.queue.length) this._show(this.queue.shift());
     if (this.recent.size > 200) {
       for (const [k, t] of this.recent) if (this.time - t > 30) this.recent.delete(k);
@@ -147,7 +151,7 @@ export class VoiceSystem {
     const v = item.voice || {};
     u.pitch = Math.max(0.1, Math.min(2, v.pitch ?? 1));
     u.rate = Math.max(0.5, Math.min(2, (v.rate ?? 1) * (item.channel === 'radio' ? 1.1 : 1.15)));
-    u.volume = 1;
+    u.volume = Math.max(0, Math.min(1, this.speechVolume));
     try {
       synth.speak(u);
     } catch {

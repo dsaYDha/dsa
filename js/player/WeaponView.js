@@ -125,6 +125,58 @@ export class WeaponView {
     this.gun.traverse((o) => {
       if (o.isMesh) o.frustumCulled = false;
     });
+
+    // 5단계: 탄피 배출 (총기 카메라 공간에서 오른쪽으로 튀어 화면 밖으로 떨어짐, 작은 풀)
+    const brass = new THREE.MeshStandardMaterial({ color: 0xb58a3a, roughness: 0.35, metalness: 0.85 });
+    const cg = new THREE.CylinderGeometry(0.0055, 0.0055, 0.026, 8);
+    cg.rotateX(Math.PI / 2);
+    this.casings = [];
+    for (let i = 0; i < 8; i++) {
+      const m = new THREE.Mesh(cg, brass);
+      m.visible = false;
+      m.frustumCulled = false;
+      this.scene.add(m);
+      this.casings.push({ mesh: m, vel: new THREE.Vector3(), spin: new THREE.Vector3(), t: 0 });
+    }
+    this.casingCursor = 0;
+    this.portLocal = new THREE.Vector3(0.032, 0.03, -0.02);
+  }
+
+  /** 새 판: 자세·반동·탄피 초기화 */
+  reset() {
+    this.kick = this.kickRot = this.kickSide = 0;
+    this.sway.set(0, 0);
+    this.swayVel.set(0, 0);
+    this.sprintT = 0;
+    this.lowerT = 0;
+    this.flashT = 0;
+    for (const c of this.casings) c.mesh.visible = false;
+  }
+
+  _ejectCasing() {
+    const c = this.casings[this.casingCursor];
+    this.casingCursor = (this.casingCursor + 1) % this.casings.length;
+    this.gun.updateWorldMatrix(true, false);
+    c.mesh.position.copy(this.portLocal);
+    this.gun.localToWorld(c.mesh.position);
+    c.mesh.quaternion.copy(this.gun.getWorldQuaternion(_q));
+    c.vel.set(R.range(1.1, 1.7), R.range(0.7, 1.2), R.range(0.05, 0.35));
+    c.spin.set(R.range(-25, 25), R.range(-12, 12), R.range(-25, 25));
+    c.t = 0;
+    c.mesh.visible = true;
+  }
+
+  _updateCasings(dt) {
+    for (const c of this.casings) {
+      if (!c.mesh.visible) continue;
+      c.t += dt;
+      c.vel.y -= 9.8 * dt;
+      c.mesh.position.addScaledVector(c.vel, dt);
+      c.mesh.rotation.x += c.spin.x * dt;
+      c.mesh.rotation.y += c.spin.y * dt;
+      c.mesh.rotation.z += c.spin.z * dt;
+      if (c.t > 0.75) c.mesh.visible = false;
+    }
   }
 
   setAspect(a) {
@@ -139,6 +191,7 @@ export class WeaponView {
     this.flashT = 0.045;
     this.flash.rotation.z = R.range(0, Math.PI * 2);
     this.flash.scale.setScalar(R.range(0.8, 1.2));
+    this._ejectCasing();
   }
 
   // 총구의 월드 좌표 (예광탄·총구 섬광 위치)
@@ -262,6 +315,7 @@ export class WeaponView {
     }
     this.torch.intensity = p.flashlightOn ? 0.6 : 0;
     this.root.visible = this.visible;
+    this._updateCasings(dt);
   }
 
   render(renderer) {

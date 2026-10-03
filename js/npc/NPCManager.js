@@ -18,6 +18,8 @@ const _w = new THREE.Vector3();
 const _frustum = new THREE.Frustum();
 const _pm = new THREE.Matrix4();
 const _hits = [];
+const _meshes = [];
+const _dir = new THREE.Vector3();
 
 export class NPCManager {
   constructor(game) {
@@ -32,6 +34,8 @@ export class NPCManager {
     this.apparent = { enemy: [], ally: [], civilian: [] }; // 겉보기 소속 — 아군·민간인 AI 는 이것만 본다
     this._aimT = 0;
     this._evacNodes = null;
+    this.shadowDist = 30; // 그래픽 프리셋: 그림자를 드리우는 NPC 거리 (0 = 끔)
+    this.lodStats = { full: 0, half: 0, third: 0 };
     game.events.on(Events.WEAPON_FIRED, (e) => {
       // 적은 플레이어 총성을 듣고, 민간인은 모든 총성에 반응
       const r2 = CONFIG.npc.hearingRadius ** 2;
@@ -133,7 +137,9 @@ export class NPCManager {
   spawnDisguised(o) {
     const game = this.game;
     const sp = o.spawnPoint;
-    const profile = o.profile || rollDisguiseProfile(o.as, o.threat || game.director.threat, { role: o.role, infiltrate: o.infiltrate, fromEnemySide: o.fromEnemySide });
+    // 5단계: 숙련도는 난이도 곡선의 시간 구간별 분포에서 (초반 숙련 0 위주 → 후반 완벽 위장 등장)
+    const skill = game.difficulty.rollSkill(R);
+    const profile = o.profile || rollDisguiseProfile(o.as, o.threat || game.director.threat, { role: o.role, infiltrate: o.infiltrate, fromEnemySide: o.fromEnemySide, skill });
     const npc = new EnemySoldier(game, {
       type: o.as === 'civilian' ? 'assault' : R.chance(0.5) ? 'assault' : 'rifleman',
       threat: o.threat || game.director.threat,
@@ -273,13 +279,24 @@ export class NPCManager {
     }
     for (let i = this.squads.length - 1; i >= 0; i--) if (this.squads[i].done) this.squads.splice(i, 1);
     this._updateAim(dt);
+    const sd2 = this.shadowDist * this.shadowDist;
+    const L = this.lodStats;
+    L.full = L.half = L.third = 0;
     for (const n of this.list) {
+      // 5단계 LOD: 가깝거나 화면에 보이는 인물은 매 프레임, 화면 밖 40m 넘으면 3프레임, 보여도 55m 넘으면 2프레임마다 애니메이션
+      //   + 화면 밖 45m 넘으면 AI(think)도 2프레임에 한 번 (누적 dt)
+      const d2 = n.position.distanceToSquared(pp);
+      n.animEvery = d2 < 40 * 40 || (n.visibleToPlayer && d2 < 55 * 55) ? 1 : n.visibleToPlayer ? 2 : 3;
+      n.thinkEvery = !n.visibleToPlayer && d2 > 45 * 45 && !(game.dialogue && game.dialogue.target === n) ? 2 : 1;
+      if (n.animEvery === 1) L.full++;
+      else if (n.animEvery === 2) L.half++;
+      else L.third++;
       n.update(dt);
       // 실내 음영 + 가까운 NPC 만 그림자
       const indoor = game.world.isIndoors(n.position) ? 1 : 0;
       n._indoor = (n._indoor ?? indoor) + (indoor - (n._indoor ?? indoor)) * Math.min(1, dt * 4);
       n.rig.setInterior(n._indoor);
-      n.rig.setCastShadow(n.position.distanceToSquared(pp) < 30 * 30);
+      n.rig.setCastShadow(d2 < sd2);
     }
     // 제거
     for (let i = this.list.length - 1; i >= 0; i--) {
@@ -340,8 +357,10 @@ export class NPCManager {
       if (!_ray.ray.intersectsSphere(_sphere)) continue;
       n.root.updateMatrixWorld(true);
       _hits.length = 0;
-      const meshes = n.rig.hitMeshes.concat(n.insignia.hitMeshes());
-      _ray.intersectObjects(meshes, false, _hits);
+      _meshes.length = 0;
+      for (const m of n.rig.hitMeshes) _meshes.push(m);
+      if (n.insignia.mesh && n.insignia.mesh.visible) _meshes.push(n.insignia.mesh);
+      _ray.intersectObjects(_meshes, false, _hits);
       for (const h of _hits) {
         // 소총 등 판정 없는 파츠는 통과
         const zones = h.object.geometry.userData.zones;
@@ -362,7 +381,7 @@ export class NPCManager {
   getAimedNPC({ maxDistance = 60, coneDeg = 0, includeDead = false } = {}) {
     const game = this.game;
     const cam = game.camera;
-    const dir = cam.getWorldDirection(new THREE.Vector3());
+    const dir = cam.getWorldDirection(_dir);
     const world = game.world.raycast(cam.position, dir, maxDistance);
     const limit = world ? world.distance : maxDistance;
     const hit = this.raycast(cam.position, dir, limit);

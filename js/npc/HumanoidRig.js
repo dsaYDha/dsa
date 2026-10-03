@@ -137,8 +137,61 @@ function shade(color, k) {
   return _c.getHex();
 }
 
-const geoCache = new Map();
-const skinCache = new Map();
+// 스킨 지오메트리 캐시 — 같은 복장(키)의 인물은 지오메트리 하나를 함께 쓴다 (참조 수 관리)
+// 5단계: 사복 조합은 사실상 무한해서 캐시가 계속 커지던 문제 → 아무도 안 쓰는 지오메트리는 최근 것 몇 개만 남기고 dispose
+const skinCache = new Map(); // key → { geo, refs, idleAt }
+const IDLE_KEEP = 24; // 참조 0 인 채로 남겨 둘 최대 수 (군복처럼 자주 다시 쓰는 복장을 매번 다시 만들지 않게)
+let idleSeq = 0;
+
+function acquireSkin(key, build) {
+  let e = skinCache.get(key);
+  if (!e) {
+    e = { geo: build(), refs: 0, idleAt: 0 };
+    skinCache.set(key, e);
+  }
+  e.refs++;
+  return e.geo;
+}
+
+function releaseSkin(key) {
+  const e = skinCache.get(key);
+  if (!e) return;
+  e.refs = Math.max(0, e.refs - 1);
+  if (e.refs > 0) return;
+  e.idleAt = ++idleSeq;
+  let idle = 0;
+  for (const v of skinCache.values()) if (v.refs === 0) idle++;
+  if (idle <= IDLE_KEEP) return;
+  // 가장 오래 쉬고 있던 것부터 정리
+  const list = [];
+  for (const [k, v] of skinCache) if (v.refs === 0) list.push([k, v]);
+  list.sort((a, b) => a[1].idleAt - b[1].idleAt);
+  for (let i = 0; i < list.length - IDLE_KEEP; i++) {
+    list[i][1].geo.dispose();
+    skinCache.delete(list[i][0]);
+  }
+}
+
+/** 디버그·테스트: 캐시 상태 { entries, inUse, idle } */
+export function skinCacheStats() {
+  let inUse = 0;
+  for (const v of skinCache.values()) if (v.refs > 0) inUse++;
+  return { entries: skinCache.size, inUse, idle: skinCache.size - inUse };
+}
+
+// NPC 재질 풀 — 인물마다 실내 음영·노란 윤곽 유니폼이 따로 필요해 재질을 하나씩 쓰지만,
+// 지우지 않고 돌려 써서 (1) 메모리가 늘지 않고 (2) 모든 인물이 사라져도 셰이더 프로그램이 해제·재컴파일되지 않게 한다
+const rigMatPool = [];
+function acquireRigMaterial() {
+  const m = rigMatPool.pop() || patchInterior(new THREE.MeshLambertMaterial({ vertexColors: true }), false);
+  m.userData.uInterior.value = 0;
+  m.userData.uHighlight.value.setRGB(0, 0, 0);
+  return m;
+}
+function releaseRigMaterial(m) {
+  if (rigMatPool.length < 64) rigMatPool.push(m);
+  else m.dispose();
+}
 
 // 4단계: 신분증 소품 (보여줄 때만 오른손에 붙는 작은 판, 모든 인물이 같은 모양 — 위조 신분증도 겉보기는 같다)
 let CARD = null;
@@ -249,9 +302,8 @@ function footGeometry(o) {
   }
 }
 
+// 파츠별 지오메트리 (스킨 지오메트리를 만들 때만 쓰고 버림 — 캐시하지 않음)
 function buildGeometries(o) {
-  const key = JSON.stringify(o);
-  if (geoCache.has(key)) return geoCache.get(key);
   const G = {};
   const pelvis = [box(0.34, 0.2, 0.22, o.pants, 0, -0.02, 0), box(0.36, 0.05, 0.24, 0x2b2a24, 0, 0.07, 0)];
   if (o.top === 'coat') pelvis.push(box(0.4, 0.34, 0.27, o.uniform, 0, -0.09, 0));
@@ -311,7 +363,6 @@ function buildGeometries(o) {
   G.shin = merge([box(0.13, 0.4, 0.14, o.pants, 0, -0.2, 0), ...footGeometry(o)]);
   if (o.rifle) G.rifle = rifleGeometry(o.rifleStyle);
   if (o.bag === 'carry') G.carry = merge([box(0.1, 0.24, 0.32, o.bagColor, 0, -0.47, 0.02), box(0.02, 0.08, 0.1, 0x1a1816, 0, -0.33, 0.02)]);
-  geoCache.set(key, G);
   return G;
 }
 
@@ -322,6 +373,9 @@ const lerp = (a, b, t) => a + (b - a) * t;
 export function buildSkinnedGeometry(parts, restOffsets) {
   const list = [];
   const zones = [];
+  // uv 는 모든 파츠에 있을 때만 유지 (표식의 색각 보조 무늬용 — 몸 파츠는 uv 없음)
+  const attrs = ['position', 'normal', 'color', 'skinIndex', 'skinWeight'];
+  if (parts.every((p) => p.geo.attributes.uv)) attrs.push('uv');
   for (const p of parts) {
     const bi = BONE_NAMES.indexOf(p.bone);
     let g = p.geo.index ? p.geo.toNonIndexed() : p.geo.clone();
@@ -339,7 +393,7 @@ export function buildSkinnedGeometry(parts, restOffsets) {
     g.setAttribute('skinWeight', new THREE.Float32BufferAttribute(sw, 4));
     if (!g.attributes.color) g = paint(g, 0xffffff);
     const keep = new THREE.BufferGeometry();
-    for (const a of ['position', 'normal', 'color', 'skinIndex', 'skinWeight']) keep.setAttribute(a, g.attributes[a]);
+    for (const a of attrs) keep.setAttribute(a, g.attributes[a]);
     list.push(keep);
   }
   const m = mergeGeometries(list, false);
@@ -351,7 +405,8 @@ export function buildSkinnedGeometry(parts, restOffsets) {
 export class HumanoidRig {
   constructor(outfit) {
     this.outfit = { ...outfit };
-    this.material = patchInterior(new THREE.MeshLambertMaterial({ vertexColors: true }), false);
+    this.material = acquireRigMaterial();
+    this._skinKey = null;
     this.root = new THREE.Group();
     this.root.name = 'Humanoid';
     this.anchors = {};
@@ -432,8 +487,8 @@ export class HumanoidRig {
   applyOutfit(outfit) {
     this.outfit = { ...outfit };
     const key = JSON.stringify(this.outfit);
-    let geo = skinCache.get(key);
-    if (!geo) {
+    if (key === this._skinKey && this.mesh) return;
+    const geo = acquireSkin(key, () => {
       const G = buildGeometries(this.outfit);
       const parts = [
         { bone: 'pelvis', geo: G.pelvis, zone: 'torso' },
@@ -450,9 +505,10 @@ export class HumanoidRig {
       ];
       if (this.outfit.rifle) parts.push({ bone: 'rifleMount', geo: G.rifle, zone: 'none' });
       if (G.carry) parts.push({ bone: 'elbowR', geo: G.carry, zone: 'none' });
-      geo = buildSkinnedGeometry(parts, this.restOffsets);
-      skinCache.set(key, geo);
-    }
+      return buildSkinnedGeometry(parts, this.restOffsets);
+    });
+    if (this._skinKey) releaseSkin(this._skinKey);
+    this._skinKey = key;
     if (this.mesh) {
       this.mesh.geometry = geo;
     } else {
@@ -471,7 +527,7 @@ export class HumanoidRig {
   }
 
   setInterior(v) {
-    this.material.userData.uInterior.value = v;
+    if (this.material) this.material.userData.uInterior.value = v;
   }
 
   // 4단계: 신분증을 손에 듦 (처음 쓸 때 만들어 오른 팔뚝 뼈에 붙임 — 보일 때만 드로우콜 1)
@@ -488,7 +544,7 @@ export class HumanoidRig {
 
   // 관찰 모드 노란 윤곽 (0 이면 끔)
   setHighlight(intensity) {
-    const u = this.material.userData.uHighlight;
+    const u = this.material && this.material.userData.uHighlight;
     if (!u) return;
     if (intensity <= 0) u.value.setRGB(0, 0, 0);
     else u.value.setRGB(1.0 * intensity, 0.78 * intensity, 0.12 * intensity);
@@ -670,7 +726,13 @@ export class HumanoidRig {
     this.rifleMount.rotation.set(lerp(lerp(0.55, 0, aim) - this.kick * 0.12, 1.2, lowered), lerp(lerp(0.25, 0, aim), 0.08, lowered), lerp(lerp(0.5, 0, aim), 0.12, lowered));
   }
 
+  // 5단계: 지오메트리 참조 반환 + 뼈 텍스처(GPU) 해제 + 재질은 풀로 — 장시간·반복 재시작에도 메모리가 늘지 않게
   dispose() {
-    this.material.dispose();
+    if (this._skinKey) releaseSkin(this._skinKey);
+    this._skinKey = null;
+    this.skeleton.dispose();
+    this.setHighlight(0);
+    releaseRigMaterial(this.material);
+    this.material = null;
   }
 }

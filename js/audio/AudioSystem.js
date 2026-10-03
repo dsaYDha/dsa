@@ -1,5 +1,11 @@
 // 사운드 — 외부 파일 없이 Web Audio API 로 모두 합성
 // AudioContext 는 시작 버튼을 누를 때 생성 (브라우저 자동재생 정책)
+// 5단계 믹스: master → (사망 시 먹먹하게) → 압축기 → 출력
+//   버스: sfx(총성·피탄·발소리) / amb(바람·먼 교전 — 실내에선 먹먹하게) / ui(피드백) / voice(무전 잡음 — TTS 음량도 같은 설정) / music(긴장 드론)
+//   우선순위(덕킹): 무전·대사가 들리는 동안 amb·music(·sfx 조금)을 줄임, 관찰 중엔 주변 소리를 줄임(setFocus)
+//   잔향: 실외(긴 꼬리)와 실내(짧은 반사) 두 컨볼버를 플레이어 위치에 따라 교차
+//   먼 교전: 원거리 소총·기관총 / 중거리 교전 / 가끔 먼 사이렌 — 위협 단계가 오를수록 잦아짐
+//   긴장 음악: 낮은 드론 + 잡음 바닥 + (고조되면) 높은 떨림·맥동 — 위협 단계·주변 적·습격·관찰/대화·저체력에 반응
 import { CONFIG } from '../config.js';
 
 const rand = (a, b) => a + Math.random() * (b - a);
@@ -9,10 +15,16 @@ export class AudioSystem {
     this.ctx = null;
     this.ready = false;
     this.volume = CONFIG.audio.masterVolume;
+    this.vol = { sfx: 1, voice: 1, music: 0.7 }; // 설정 음량 (버스별)
+    this.mixState = { focus: 0, duck: 0, indoor: 0, dead: 0 };
+    this._applied = {};
     this._npcSteps = 0;
     this._heartbeat = false;
     this._nextBeat = 0;
     this._focus = 0;
+    this.tension = 0;
+    this._pulseT = 0;
+    this._battle = { far: 4, mid: 12, siren: 70 };
   }
 
   init() {
@@ -25,37 +37,140 @@ export class AudioSystem {
     const ctx = new AC();
     this.ctx = ctx;
 
+    const A = CONFIG.audio;
     this.master = ctx.createGain();
     this.master.gain.value = this.volume;
+    // 사망 시 먹먹하게 (저역 통과)
+    this.masterFilter = ctx.createBiquadFilter();
+    this.masterFilter.type = 'lowpass';
+    this.masterFilter.frequency.value = 20000;
     const comp = ctx.createDynamicsCompressor();
     comp.threshold.value = -14;
     comp.knee.value = 10;
     comp.ratio.value = 5;
     comp.attack.value = 0.003;
     comp.release.value = 0.2;
-    this.master.connect(comp).connect(ctx.destination);
+    this.comp = comp;
+    this.master.connect(this.masterFilter).connect(comp).connect(ctx.destination);
 
     this.sfx = ctx.createGain();
     this.sfx.connect(this.master);
+    // 환경음: 실내에선 바깥 소리를 먹먹하게
     this.amb = ctx.createGain();
-    this.amb.gain.value = 0.9;
-    this.amb.connect(this.master);
+    this.amb.gain.value = A.mix.amb;
+    this.ambFilter = ctx.createBiquadFilter();
+    this.ambFilter.type = 'lowpass';
+    this.ambFilter.frequency.value = 20000;
+    this.amb.connect(this.ambFilter).connect(this.master);
     this.ui = ctx.createGain();
-    this.ui.gain.value = 0.9;
+    this.ui.gain.value = A.mix.ui;
     this.ui.connect(this.master);
+    this.voice = ctx.createGain();
+    this.voice.gain.value = A.mix.voice;
+    this.voice.connect(this.master);
+    this.music = ctx.createGain();
+    this.music.gain.value = 0;
+    this.music.connect(this.master);
 
-    // 도심 잔향 (생성한 임펄스 응답)
-    this.reverb = ctx.createConvolver();
-    this.reverb.buffer = this._impulse(CONFIG.audio.reverbSeconds, 2.6);
+    // 잔향: 실외(도심 메아리, 긴 꼬리) / 실내(방 안 짧은 반사) — 플레이어 위치에 따라 교차
     this.reverbSend = ctx.createGain();
     this.reverbSend.gain.value = 0.55;
-    this.reverbSend.connect(this.reverb).connect(this.master);
+    this.reverb = ctx.createConvolver();
+    this.reverb.buffer = this._impulse(A.reverbSeconds, 2.6);
+    this.roomReverb = ctx.createConvolver();
+    this.roomReverb.buffer = this._impulse(A.roomReverbSeconds, 1.6, 0.06);
+    this.outGain = ctx.createGain();
+    this.outGain.gain.value = 1;
+    this.roomGain = ctx.createGain();
+    this.roomGain.gain.value = 0;
+    this.reverbSend.connect(this.outGain).connect(this.reverb).connect(this.master);
+    this.reverbSend.connect(this.roomGain).connect(this.roomReverb).connect(this.master);
 
     this.noise = this._noiseBuffer(2.0, 'white');
     this.brown = this._noiseBuffer(3.0, 'brown');
 
     this._startAmbience();
+    this._startMusic();
     this.ready = true;
+    this._applied = {};
+    this._applyMix(true);
+  }
+
+  // ------------------------------------------------------------------
+  // 5단계 믹스
+  // ------------------------------------------------------------------
+  /** 설정 음량 (0~1): master·sfx·voice·music */
+  setVolumes({ master, sfx, voice, music }) {
+    if (master != null) this.setVolume(master);
+    if (sfx != null) this.vol.sfx = sfx;
+    if (voice != null) this.vol.voice = voice;
+    if (music != null) this.vol.music = music;
+    this._applyMix(true);
+  }
+
+  /** 매 프레임 상태: focus(관찰 0~1) / duck(무전·대사 0~1) / indoor(실내 0~1) / dead(사망 0~1) */
+  updateMix(state) {
+    const m = this.mixState;
+    m.focus = state.focus ?? m.focus;
+    m.duck += ((state.duck ?? 0) - m.duck) * Math.min(1, (state.dt || 0.016) * ((state.duck ?? 0) > m.duck ? 8 : 2.5));
+    m.indoor += ((state.indoor ?? 0) - m.indoor) * Math.min(1, (state.dt || 0.016) * 3);
+    m.dead = state.dead ?? m.dead;
+    this._applyMix(false);
+  }
+
+  _applyMix(force) {
+    if (!this.ready) return;
+    const A = CONFIG.audio;
+    const m = this.mixState;
+    const D = A.duck;
+    const t = this.ctx.currentTime;
+    const set = (key, param, v, tc = 0.08) => {
+      const prev = this._applied[key];
+      if (!force && prev != null && Math.abs(prev - v) < 0.004) return;
+      this._applied[key] = v;
+      param.setTargetAtTime(v, t, tc);
+    };
+    set('sfx', this.sfx.gain, this.vol.sfx * (1 - 0.55 * m.focus) * (1 - D.sfx * m.duck));
+    set('amb', this.amb.gain, A.mix.amb * this.vol.sfx * (1 - 0.8 * m.focus) * (1 - D.amb * m.duck));
+    set('ui', this.ui.gain, A.mix.ui * this.vol.sfx);
+    set('voice', this.voice.gain, A.mix.voice * this.vol.voice);
+    set('music', this.music.gain, A.mix.music * this.vol.music * (1 - D.music * m.duck) * (1 - 0.6 * m.dead), 0.25);
+    set('ambLp', this.ambFilter.frequency, 20000 - (20000 - A.indoorAmbMuffle) * Math.min(1, m.indoor), 0.15);
+    set('outRev', this.outGain.gain, 1 - 0.7 * m.indoor, 0.2);
+    set('roomRev', this.roomGain.gain, 0.9 * m.indoor, 0.2);
+  }
+
+  /** 사망 연출: 먹먹해지고 귀울림 (dismissed 면 귀울림 없이 조금만) */
+  onDeath(ring = true) {
+    if (!this.ready) return;
+    const t = this.now;
+    this.masterFilter.frequency.cancelScheduledValues(t);
+    this.masterFilter.frequency.setValueAtTime(this.masterFilter.frequency.value, t);
+    this.masterFilter.frequency.exponentialRampToValueAtTime(ring ? 520 : 2400, t + 1.1);
+    if (!ring) return;
+    // 귀울림: 압축기 뒤로 바로 (먹먹함의 영향을 받지 않게)
+    const o = this.ctx.createOscillator();
+    o.type = 'sine';
+    o.frequency.value = rand(3100, 3500);
+    const g = this.ctx.createGain();
+    g.gain.setValueAtTime(0.0001, t);
+    g.gain.exponentialRampToValueAtTime(0.05 * this.volume, t + 0.08);
+    g.gain.exponentialRampToValueAtTime(0.0001, t + 3.2);
+    o.connect(g).connect(this.comp);
+    o.start(t);
+    o.stop(t + 3.3);
+  }
+
+  /** 새 판·메뉴: 사망 먹먹함 해제, 음악 긴장 0 */
+  resetRun() {
+    this.tension = 0;
+    this.mixState.dead = 0;
+    this.mixState.duck = 0;
+    if (!this.ready) return;
+    const t = this.now;
+    this.masterFilter.frequency.cancelScheduledValues(t);
+    this.masterFilter.frequency.setValueAtTime(20000, t);
+    this._applyMix(true);
   }
 
   _noiseBuffer(sec, kind) {
@@ -74,7 +189,8 @@ export class AudioSystem {
     return buf;
   }
 
-  _impulse(sec, decay) {
+  // earlyDensity: 이른 반사 비율 (실내는 벽이 가까워 촘촘한 반사)
+  _impulse(sec, decay, earlyDensity = 0.01) {
     const ctx = this.ctx;
     const len = Math.floor(ctx.sampleRate * sec);
     const buf = ctx.createBuffer(2, len, ctx.sampleRate);
@@ -83,7 +199,7 @@ export class AudioSystem {
       for (let i = 0; i < len; i++) {
         const t = i / len;
         // 초반 이른 반사 + 지수 감쇠 꼬리
-        const early = i < ctx.sampleRate * 0.08 && Math.random() < 0.01 ? 1.5 : 0;
+        const early = i < ctx.sampleRate * 0.08 && Math.random() < earlyDensity ? 1.5 : 0;
         d[i] = ((Math.random() * 2 - 1) + early) * Math.pow(1 - t, decay);
       }
     }
@@ -93,6 +209,10 @@ export class AudioSystem {
   setVolume(v) {
     this.volume = v;
     if (this.master) this.master.gain.setTargetAtTime(v, this.ctx.currentTime, 0.05);
+  }
+
+  get voiceLevel() {
+    return this.volume * this.vol.voice;
   }
 
   suspend() {
@@ -259,8 +379,60 @@ export class AudioSystem {
   radioClick() {
     if (!this.ready) return;
     const t = this.now;
-    this._noiseBurst(this.ui, t, { dur: 0.09, gain: 0.12, type: 'bandpass', freq: 2200, q: 3 });
-    this._tone(this.ui, t, { f0: 1600, dur: 0.03, gain: 0.04, type: 'square' });
+    this._noiseBurst(this.voice, t, { dur: 0.09, gain: 0.12, type: 'bandpass', freq: 2200, q: 3 });
+    this._tone(this.voice, t, { f0: 1600, dur: 0.03, gain: 0.04, type: 'square' });
+  }
+
+  // 5단계 신호음: 암구호 교체 (무전 삐 소리 세 번)
+  countersignCue() {
+    if (!this.ready) return;
+    const t = this.now;
+    this._noiseBurst(this.voice, t, { dur: 0.12, gain: 0.1, type: 'bandpass', freq: 2000, q: 2 });
+    for (let i = 0; i < 3; i++) this._tone(this.voice, t + 0.14 + i * 0.13, { f0: 1180, dur: 0.07, gain: 0.07, type: 'square' });
+  }
+
+  // 5단계 신호음: 습격 시작 (낮게 부풀어 오르는 금관 같은 화음 + 바람 소리)
+  assaultCue() {
+    if (!this.ready) return;
+    const ctx = this.ctx;
+    const t = this.now;
+    const lp = ctx.createBiquadFilter();
+    lp.type = 'lowpass';
+    lp.frequency.setValueAtTime(180, t);
+    lp.frequency.exponentialRampToValueAtTime(1400, t + 0.7);
+    lp.frequency.exponentialRampToValueAtTime(300, t + 1.4);
+    const g = ctx.createGain();
+    g.gain.setValueAtTime(0.0001, t);
+    g.gain.exponentialRampToValueAtTime(0.16, t + 0.45);
+    g.gain.exponentialRampToValueAtTime(0.0001, t + 1.5);
+    lp.connect(g).connect(this.ui);
+    for (const f of [73.4, 110, 146.8]) {
+      const o = ctx.createOscillator();
+      o.type = 'sawtooth';
+      o.frequency.setValueAtTime(f * 0.97, t);
+      o.frequency.linearRampToValueAtTime(f, t + 0.5);
+      o.connect(lp);
+      o.start(t);
+      o.stop(t + 1.55);
+    }
+    this._noiseBurst(this.ui, t + 0.1, { dur: 1.1, gain: 0.06, type: 'bandpass', freq: 600, freqEnd: 1800, q: 0.8, attack: 0.4 });
+  }
+
+  // 5단계 신호음: 난이도 곡선 구간이 바뀜 (낮은 두 음)
+  phaseCue() {
+    if (!this.ready) return;
+    const t = this.now;
+    this._tone(this.ui, t, { f0: 196, dur: 0.5, gain: 0.08, type: 'triangle', attack: 0.05 });
+    this._tone(this.ui, t + 0.18, { f0: 147, dur: 0.7, gain: 0.08, type: 'triangle', attack: 0.05 });
+  }
+
+  // 5단계: 가까이 맞은 탄 — 흙·파편이 후드득
+  nearImpact(pos) {
+    if (!this.ready) return;
+    const t = this.now;
+    const out = this._spatial(pos, { ref: 2, rolloff: 1.2, reverb: 0.1, muffle: false });
+    this._noiseBurst(out, t, { dur: 0.09, gain: 0.7, type: 'bandpass', freq: 1400, q: 0.7 });
+    for (let i = 0; i < 6; i++) this._noiseBurst(out, t + rand(0.05, 0.35), { dur: rand(0.01, 0.03), gain: rand(0.12, 0.3), type: 'highpass', freq: rand(2500, 5000) });
   }
 
   // 비명 (위치 사운드) — 톱니파 + 비브라토 + 포먼트 필터
@@ -342,13 +514,12 @@ export class AudioSystem {
   // ------------------------------------------------------------------
   // 3단계: 위장 적·관찰
   // ------------------------------------------------------------------
-  // 관찰 모드 집중: 주변 소리(환경·효과음)를 줄임 (0 = 평소)
+  // 관찰 모드 집중: 주변 소리(환경·효과음)를 줄임 (0 = 평소) — 5단계 믹스(updateMix)의 focus
   setFocus(f) {
     if (!this.ready || Math.abs(f - this._focus) < 0.01) return;
     this._focus = f;
-    const t = this.ctx.currentTime;
-    this.amb.gain.setTargetAtTime(0.9 * (1 - 0.8 * f), t, 0.08);
-    this.sfx.gain.setTargetAtTime(1 - 0.55 * f, t, 0.08);
+    this.mixState.focus = f;
+    this._applyMix(false);
   }
 
   // 관찰 모드 들어감/나옴 — 숨 들이쉬는 듯한 짧은 소리
@@ -581,27 +752,185 @@ export class AudioSystem {
     this._tone(p, t, { f0: 52, f1: 28, dur: 1.4, gain: 0.8, attack: 0.01 });
   }
 
-  // 먼 교전 소리 (배경)
-  distantGunfire(pan = 0) {
+  // 먼 교전 소리 (배경) — near: 0 = 아주 멀리(먹먹), 1 = 중거리(조금 또렷하고 큼)
+  distantGunfire(pan = 0, near = 0) {
     if (!this.ready) return;
     const ctx = this.ctx;
     const t0 = this.now;
     const p = ctx.createStereoPanner();
     p.pan.value = pan;
     const g = ctx.createGain();
-    g.gain.value = 0.12;
+    g.gain.value = 0.12 + near * 0.13;
     p.connect(g).connect(this.amb);
+    const rs = ctx.createGain();
+    rs.gain.value = 0.25 + near * 0.2;
+    g.connect(rs).connect(this.reverbSend);
     const lp = ctx.createBiquadFilter();
     lp.type = 'lowpass';
-    lp.frequency.value = 900;
+    lp.frequency.value = 900 + near * 1500;
     lp.connect(p);
-    const n = Math.floor(rand(3, 9));
     const auto = Math.random() < 0.5;
+    const n = auto ? Math.floor(rand(5, 14)) : Math.floor(rand(3, 9));
     let t = t0;
     for (let i = 0; i < n; i++) {
-      this._noiseBurst(lp, t, { dur: 0.12, gain: 0.9, type: 'bandpass', freq: 500, q: 0.6 });
-      t += auto ? rand(0.08, 0.12) : rand(0.25, 0.8);
+      this._noiseBurst(lp, t, { dur: 0.12, gain: 0.9, type: 'bandpass', freq: 500 + near * 300, q: 0.6 });
+      if (near > 0.5) this._tone(lp, t, { f0: 120, f1: 45, dur: 0.1, gain: 0.35 });
+      t += auto ? rand(0.075, 0.11) : rand(0.25, 0.8);
     }
+    // 중거리: 맞받아 쏘는 다른 쪽 총성
+    if (near > 0.5 && Math.random() < 0.7) {
+      const p2 = ctx.createStereoPanner();
+      p2.pan.value = Math.max(-1, Math.min(1, pan + rand(-0.5, 0.5)));
+      p2.connect(g);
+      let t2 = t0 + rand(0.4, 1.2);
+      for (let i = 0; i < Math.floor(rand(2, 6)); i++) {
+        this._noiseBurst(p2, t2, { dur: 0.1, gain: 0.6, type: 'bandpass', freq: 900, q: 0.7 });
+        t2 += rand(0.2, 0.5);
+      }
+    }
+  }
+
+  // 아주 먼 사이렌 (드물게, 아주 작게)
+  distantSiren(pan = 0) {
+    if (!this.ready) return;
+    const ctx = this.ctx;
+    const t = this.now;
+    const o = ctx.createOscillator();
+    o.type = 'sawtooth';
+    const dur = rand(7, 11);
+    o.frequency.setValueAtTime(320, t);
+    for (let k = 0; k < 3; k++) {
+      o.frequency.linearRampToValueAtTime(560, t + k * (dur / 3) + dur / 6);
+      o.frequency.linearRampToValueAtTime(320, t + (k + 1) * (dur / 3));
+    }
+    const lp = ctx.createBiquadFilter();
+    lp.type = 'lowpass';
+    lp.frequency.value = 700;
+    const p = ctx.createStereoPanner();
+    p.pan.value = pan;
+    const g = ctx.createGain();
+    g.gain.setValueAtTime(0.0001, t);
+    g.gain.exponentialRampToValueAtTime(0.022, t + 2);
+    g.gain.setValueAtTime(0.022, t + dur - 2);
+    g.gain.exponentialRampToValueAtTime(0.0001, t + dur);
+    o.connect(lp).connect(p).connect(g).connect(this.amb);
+    o.start(t);
+    o.stop(t + dur + 0.1);
+  }
+
+  /** 5단계: 먼 교전 소리 층 (Game 이 매 프레임) — 위협 단계가 오를수록 잦아짐 */
+  updateBattle(dt, threat) {
+    if (!this.ready) return;
+    const L = CONFIG.audio.distantLayers;
+    const k = Math.max(0.45, 1.15 - 0.07 * threat); // 간격 배율
+    const b = this._battle;
+    b.far -= dt;
+    b.mid -= dt;
+    b.siren -= dt;
+    if (b.far <= 0) {
+      b.far = rand(L.far[0], L.far[1]) * k;
+      this.distantGunfire(rand(-1, 1), 0);
+    }
+    if (b.mid <= 0) {
+      b.mid = rand(L.mid[0], L.mid[1]) * k;
+      this.distantGunfire(rand(-1, 1), rand(0.6, 1));
+    }
+    if (b.siren <= 0) {
+      b.siren = rand(L.siren[0], L.siren[1]);
+      this.distantSiren(rand(-0.8, 0.8));
+    }
+  }
+
+  // ------------------------------------------------------------------
+  // 5단계 긴장 음악 (합성 드론) — tension 0~1
+  // ------------------------------------------------------------------
+  _startMusic() {
+    const ctx = this.ctx;
+    const M = {};
+    M.lp = ctx.createBiquadFilter();
+    M.lp.type = 'lowpass';
+    M.lp.frequency.value = 200;
+    M.lp.Q.value = 1.2;
+    M.drone = ctx.createGain();
+    M.drone.gain.value = 0;
+    M.lp.connect(M.drone).connect(this.music);
+    M.oscs = [];
+    for (const [f, type, detune] of [[55, 'sawtooth', -7], [55, 'sawtooth', 8], [82.4, 'triangle', 0], [41.2, 'sine', 0]]) {
+      const o = ctx.createOscillator();
+      o.type = type;
+      o.frequency.value = f;
+      o.detune.value = detune;
+      o.connect(M.lp);
+      o.start();
+      M.oscs.push(o);
+    }
+    // 느린 필터 흔들림
+    const lfo = ctx.createOscillator();
+    lfo.frequency.value = 0.09;
+    const lg = ctx.createGain();
+    lg.gain.value = 60;
+    lfo.connect(lg).connect(M.lp.frequency);
+    lfo.start();
+    // 잡음 바닥
+    const nb = ctx.createBufferSource();
+    nb.buffer = this.brown;
+    nb.loop = true;
+    const bp = ctx.createBiquadFilter();
+    bp.type = 'bandpass';
+    bp.frequency.value = 260;
+    bp.Q.value = 0.9;
+    M.bed = ctx.createGain();
+    M.bed.gain.value = 0;
+    nb.connect(bp).connect(M.bed).connect(this.music);
+    nb.start();
+    // 높은 떨림 (고조됐을 때만)
+    const sh = ctx.createBufferSource();
+    sh.buffer = this.noise;
+    sh.loop = true;
+    const sbp = ctx.createBiquadFilter();
+    sbp.type = 'bandpass';
+    sbp.frequency.value = 3300;
+    sbp.Q.value = 9;
+    const trem = ctx.createGain();
+    trem.gain.value = 0.5;
+    const tl = ctx.createOscillator();
+    tl.frequency.value = 5.5;
+    const tlg = ctx.createGain();
+    tlg.gain.value = 0.5;
+    tl.connect(tlg).connect(trem.gain);
+    tl.start();
+    M.shimmer = ctx.createGain();
+    M.shimmer.gain.value = 0;
+    sh.connect(sbp).connect(trem).connect(M.shimmer).connect(this.music);
+    sh.start();
+    this.mus = M;
+  }
+
+  /** 긴장도(0~1)에 맞춰 드론·잡음·떨림·맥동 조절 (매 프레임) */
+  updateMusic(dt, tension) {
+    if (!this.ready || !this.mus) return;
+    this.tension = tension;
+    const M = this.mus;
+    const t = this.ctx.currentTime;
+    const v = Math.max(0, Math.min(1, tension));
+    const key = Math.round(v * 200);
+    if (key !== this._musKey) {
+      this._musKey = key;
+      M.drone.gain.setTargetAtTime(0.02 + 0.13 * v, t, 0.6);
+      M.lp.frequency.setTargetAtTime(150 + 950 * v * v, t, 0.6);
+      M.bed.gain.setTargetAtTime(0.03 + 0.07 * v, t, 0.6);
+      M.shimmer.gain.setTargetAtTime(v > 0.55 ? ((v - 0.55) / 0.45) * 0.05 : 0, t, 0.8);
+    }
+    // 맥동 (고조되면 북소리처럼)
+    if (v > 0.45) {
+      this._pulseT -= dt;
+      if (this._pulseT <= 0) {
+        this._pulseT = 60 / (56 + 54 * v);
+        const g = 0.08 + 0.2 * (v - 0.45) / 0.55;
+        this._tone(this.music, t, { f0: 58, f1: 34, dur: 0.22, gain: g });
+        this._noiseBurst(this.music, t, { dur: 0.05, gain: g * 0.3, type: 'lowpass', freq: 400, buffer: this.brown });
+      }
+    } else this._pulseT = 0;
   }
 
   _startAmbience() {

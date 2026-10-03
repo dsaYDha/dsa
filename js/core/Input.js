@@ -19,11 +19,18 @@ export class Input {
 
     // 액션 → 키 코드 역참조
     this.actionOf = new Map();
+    this.rebuildBindings();
+    this.captureNext = null; // 5단계 키 설정: 다음 키 입력을 이 콜백으로 넘김 (게임 입력으로 쓰지 않음)
+
+    this._bind();
+  }
+
+  /** 키 설정이 바뀌면 다시 만든다 (기본 동작 차단 대상) */
+  rebuildBindings() {
+    this.actionOf.clear();
     for (const [action, codes] of Object.entries(CONFIG.keys)) {
       for (const c of codes) this.actionOf.set(c, action);
     }
-
-    this._bind();
   }
 
   _isTyping(e) {
@@ -33,6 +40,13 @@ export class Input {
 
   _bind() {
     window.addEventListener('keydown', (e) => {
+      if (this.captureNext) {
+        e.preventDefault();
+        const fn = this.captureNext;
+        this.captureNext = null;
+        fn(e.code);
+        return;
+      }
       if (this._isTyping(e)) return;
       if (!this.down.has(e.code)) this.pressed.add(e.code);
       this.down.add(e.code);
