@@ -9,6 +9,7 @@ const _fwd = new THREE.Vector3();
 const _right = new THREE.Vector3();
 const _wish = new THREE.Vector3();
 const _tmpCap = new Capsule();
+const _aimEuler = new THREE.Euler(0, 0, 0, 'YXZ');
 
 export class Player {
   constructor(game) {
@@ -65,6 +66,13 @@ export class Player {
     this.deathT = 0;
     this.lastSafe.copy(this.collider.start);
     this.flashlightOn = false;
+    // 5단계: 재시작 시 이동·흔들림 상태도 완전히 초기화
+    this.sprinting = false;
+    this.speed = 0;
+    this.bobPhase = 0;
+    this.bobAmount = 0;
+    this.landDip = 0;
+    this.onFloor = false;
   }
 
   // 위치만 옮김 (디버그·테스트용)
@@ -87,7 +95,8 @@ export class Player {
 
   // 조준 방향 (반동 포함)
   getAimDirection(target) {
-    return target.set(0, 0, -1).applyEuler(new THREE.Euler(this.pitch + this.recoilPitch, this.yaw + this.recoilYaw, 0, 'YXZ'));
+    _aimEuler.set(this.pitch + this.recoilPitch, this.yaw + this.recoilYaw, 0, 'YXZ');
+    return target.set(0, 0, -1).applyEuler(_aimEuler);
   }
 
   takeDamage(amount, sourcePos, attacker) {
@@ -116,7 +125,8 @@ export class Player {
     // --- 시점 ---
     const ads = weapon ? weapon.adsT : 0;
     const obs = game.observation ? game.observation.t : 0; // 관찰 모드(확대) 중엔 감도·이동 속도 감소
-    const sens = P.baseSensitivity * game.settings.sensitivity * (1 - ads * (1 - P.adsSensitivityMul)) * (1 - obs * (1 - CONFIG.observe.sensitivityMul));
+    const adsMul = game.settings.adsSensitivity ?? P.adsSensitivityMul; // 5단계: 정조준 감도 설정
+    const sens = P.baseSensitivity * game.settings.sensitivity * (1 - ads * (1 - adsMul)) * (1 - obs * (1 - CONFIG.observe.sensitivityMul));
     const m = input.consumeMouse();
     this.yaw -= m.x * sens;
     this.pitch -= m.y * sens;
@@ -286,14 +296,16 @@ export class Player {
     this.shake = Math.max(0, this.shake - dt * 1.6);
     this.landDip += (0 - this.landDip) * Math.min(1, 10 * dt);
 
-    const bobY = Math.abs(Math.sin(this.bobPhase)) * this.bobAmount - this.bobAmount * 0.5;
-    const bobX = Math.cos(this.bobPhase) * this.bobAmount * 0.6;
-    const roll = Math.cos(this.bobPhase) * P.bob.roll * (this.bobAmount / P.bob.walkAmp);
+    // 5단계 접근성: '화면 흔들림 줄이기' — 피격·탄착 흔들림과 걸음 흔들림을 크게 줄임
+    const calm = this.game.settings.reduceShake ? 0.3 : 1;
+    const bobY = (Math.abs(Math.sin(this.bobPhase)) * this.bobAmount - this.bobAmount * 0.5) * calm;
+    const bobX = Math.cos(this.bobPhase) * this.bobAmount * 0.6 * calm;
+    const roll = Math.cos(this.bobPhase) * P.bob.roll * (this.bobAmount / P.bob.walkAmp) * calm;
 
     const eyeY = this.collider.end.y + this.radius - P.eyeOffset;
     this.eye.set(this.collider.end.x, eyeY, this.collider.end.z);
 
-    const s2 = this.shake * this.shake;
+    const s2 = this.shake * this.shake * calm * calm;
     const sx = (Math.sin(time * 37) + Math.sin(time * 53)) * 0.012 * s2;
     const sy = (Math.sin(time * 41 + 1) + Math.sin(time * 61)) * 0.012 * s2;
 

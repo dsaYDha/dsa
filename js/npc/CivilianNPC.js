@@ -62,6 +62,7 @@ export class CivilianNPC extends NPCBase {
     this.leaveT = 0;
     this._handsWas = false;
     this.cmdHandsT = 0; // 4단계: "손 들어!"로 든 손 유지
+    this.evacOrderT = 0; // 5단계: "대피하세요" 지시 뒤 대피로로 가는 동안 (겨눠도 멈추지 않음)
   }
 
   get stateLabel() {
@@ -136,6 +137,8 @@ export class CivilianNPC extends NPCBase {
 
   // 플레이어가 조준 중 (NPCManager 가 매 판정 주기마다 호출)
   onAimedAt(dt) {
+    // 5단계 수정: "대피하세요" 지시를 받고 대피로로 가는 중엔 겨눠도 멈추지 않음 (지시한 사람이 겨누는 건 당연 — 계속 감)
+    if (this.evacOrderT > 0) return;
     this.aimedT += dt;
     this.notAimedT = 0;
     if (this.aimedT > CONFIG.civilian.aimReactTime && this.handsUp < 0.1) {
@@ -153,6 +156,7 @@ export class CivilianNPC extends NPCBase {
 
   // 4단계: "이쪽으로 대피하세요" — 대피로로 이동
   dlgEvacuate() {
+    this.evacOrderT = 12;
     this.talkHoldT = 0;
     this.seekLeft = 0;
     this.frozenLeft = 0;
@@ -183,6 +187,7 @@ export class CivilianNPC extends NPCBase {
     this.shoutT = Math.max(0, this.shoutT - dt);
 
     // 조준당하면 손 들기 (이동 정지)
+    if (this.evacOrderT > 0) this.evacOrderT -= dt;
     this.notAimedT += dt;
     if (this.notAimedT > 0.3) this.aimedT = Math.max(0, this.aimedT - dt * 2);
     this.cmdHandsT = Math.max(0, this.cmdHandsT - dt);

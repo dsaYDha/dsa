@@ -4,7 +4,7 @@
 // 단위: 거리 m, 시간 초, 각도는 별도 표기가 없으면 '도(deg)'
 
 export const CONFIG = {
-  version: '0.4.0 (4단계: 말 걸기·문답)',
+  version: '1.0.0',
 
   // ------------------------------------------------------------------
   // 키 설정 (KeyboardEvent.code 기준 — 한글 IME 상태와 무관하게 동작)
@@ -34,8 +34,8 @@ export const CONFIG = {
   // 렌더링
   // ------------------------------------------------------------------
   render: {
-    maxPixelRatio: 1.25, // 노트북 60fps를 위해 DPR 상한
-    antialias: true,
+    maxPixelRatio: 1.25, // 노트북 60fps를 위해 DPR 상한 (그래픽 프리셋 graphics.*.maxPixelRatio 가 덮어씀)
+    antialias: false, // 5단계: 안티에일리어싱은 그래픽 프리셋이 정함 (후처리 패스의 FXAA / 멀티샘플 렌더 타깃)
     near: 0.08,
     far: 900,
     shadowMapSize: 2048,
@@ -294,11 +294,8 @@ export const CONFIG = {
   // [a, b] 쌍은 위협 단계 fromThreat → 최고 단계로 보간
   // ------------------------------------------------------------------
   disguise: {
-    fromThreat: 2, // 첫 1분(위협 1단계)엔 위장 적 없음
-    allyChance: [0.1, 0.3], // 아군처럼 보이는 등장 중 위장 적 비율
-    civilianChance: [0.1, 0.25], // 민간인처럼 보이는 등장 중 위장 적 비율
-    maxActive: [2, 3], // 동시 활성 위장 적 상한
-    gearClues: [[2, 3], [0, 1]], // 위장 적의 장비 단서 수 (초반 2~3개 → 후반 0~1개, 0개 = 완벽 위장)
+    fromThreat: 2, // 아래 [a, b] 보간의 시작 단계 (위장 적이 언제·얼마나 나오는지는 5단계 난이도 곡선 curve 가 정한다)
+    gearBySkill: [[2, 3], [1, 1], [0, 0]], // 숙련도별 장비 단서 수 (숙련 0: 2~3개, 1: 1개, 2: 0개 = 완벽 위장). 숙련도 분포는 curve.phases[].skill
     behaviorTraits: [2, 3], // 행동 성향 수 (실제로 그 상황이 일어나야 단서가 됨)
     scoutChance: { ally: 0.15, civilian: 0.55 }, // 정찰형 비율 (나머지는 기습형)
     escortChance: 0.35, // 가짜 아군 기습형 중 '동행'으로 접근하는 비율
@@ -324,11 +321,9 @@ export const CONFIG = {
       watchRange: [12, 38],
       longWatchClue: 6, // 이 시간 넘게 지켜보면 '오래 내다봄' 단서
     },
-    // 오판 유도용 진짜 행동 (위장 적과 비슷한 빈도)
+    // 오판 유도용 진짜 행동 (위장 적과 비슷한 빈도 — 비율은 curve.phases[].decoyAlly / decoyCiv)
     decoy: {
-      allyChance: [0.3, 0.5], // 아군 분대 등장 중 낙오병(합류하러 다가옴)·동행 엄호
       regroupEscortChance: 0.2, // 플레이어 곁으로 재집결하는 분대가 한 명을 동행으로 붙일 확률 (위장 적 동행과 섞이게)
-      civilianChance: [0.12, 0.25], // 민간인 등장 중 얼어붙음(웅크리지 못함)·도움 요청(다가옴)
       escortTime: [35, 70],
       frozenTime: [8, 18],
     },
@@ -416,6 +411,46 @@ export const CONFIG = {
   },
 
   // ------------------------------------------------------------------
+  // 5단계: 난이도 곡선 — 시간(분) 구간마다 무엇이 얼마나 나오는지 명시 (구간 안에서는 일정, 마지막 구간 이후 = 상한 유지)
+  // 적의 수·명중률·반응·습격 규모는 아래 threat(1분마다 1단계, 레벨 1 → 10 보간)가, 사람 구성·위장은 이 곡선이 정한다.
+  //   mix: 겉보기 출현 비율 [적, 아군, 민간인] / fakeAlly·fakeCiv: 아군·민간인처럼 보이는 등장 중 위장 적 비율
+  //   skill: 위장 숙련도 분포 [숙련 0(장비 단서 2~3), 1(1개), 2(0개 = 완벽 위장)] / maxDisguised: 동시 위장 적 상한
+  //   decoyAlly·decoyCiv: 진짜 아군 분대·민간인 등장 중 '오판 유도 행동'(낙오병·동행 / 얼어붙음·도움 요청) 비율
+  //   nearEnemy: 아군·민간인이 교전 중인 적 근처에 섞여 나올 확률 (혼전)
+  // ------------------------------------------------------------------
+  curve: {
+    phases: [
+      { at: 0, name: '적응', note: '적 위주 · 아군·민간인 적음 · 위장 없음',
+        mix: [78, 10, 12], fakeAlly: 0, fakeCiv: 0, skill: [1, 0, 0], maxDisguised: 0, decoyAlly: 0, decoyCiv: 0, nearEnemy: 0.1 },
+      { at: 1, name: '위장 등장', note: '위장 적이 섞여 든다 — 장비 단서가 많다',
+        mix: [68, 14, 18], fakeAlly: 0.12, fakeCiv: 0.1, skill: [0.85, 0.15, 0], maxDisguised: 2, decoyAlly: 0.3, decoyCiv: 0.12, nearEnemy: 0.2 },
+      { at: 3, name: '혼전', note: '아군·민간인이 섞인 습격 · 숙련된 위장 증가',
+        mix: [64, 16, 20], fakeAlly: 0.2, fakeCiv: 0.17, skill: [0.45, 0.45, 0.1], maxDisguised: 2, decoyAlly: 0.4, decoyCiv: 0.18, nearEnemy: 0.45 },
+      { at: 6, name: '고강도', note: '완벽 위장 등장 · 최고 강도 유지',
+        mix: [62, 16, 22], fakeAlly: 0.28, fakeCiv: 0.24, skill: [0.2, 0.45, 0.35], maxDisguised: 3, decoyAlly: 0.5, decoyCiv: 0.25, nearEnemy: 0.6 },
+    ],
+  },
+
+  // 5단계: 난이도 프리셋 (시작 화면에서 선택) — 곡선·위협 단계 값에 곱하는 배율
+  //   enemyAccuracy: 적 명중률 / enemyReaction: 적 반응 지연(작을수록 빠름) / disguiseMul: 위장 적 비율(fakeAlly·fakeCiv)
+  //   skillMul: 숙련도 분포 가중치 배율 [0, 1, 2] (2번째 = 완벽 위장 비율) / observeMul: 관찰로 사실 하나를 알아채는 시간
+  //   card: 암구호 카드 표시 허용 (어려움은 무전을 외워서)
+  difficulty: {
+    easy: { label: '쉬움', desc: '적 명중률·반응 낮음 · 위장 적 적음 · 완벽 위장 드묾 · 관찰 빠름',
+      enemyAccuracy: 0.72, enemyReaction: 1.3, disguiseMul: 0.7, skillMul: [1.4, 0.8, 0.35], observeMul: 0.75, card: true },
+    normal: { label: '보통', desc: '기본 밸런스',
+      enemyAccuracy: 1, enemyReaction: 1, disguiseMul: 1, skillMul: [1, 1, 1], observeMul: 1, card: true },
+    hard: { label: '어려움', desc: '적 명중률·반응 높음 · 위장 적 많음 · 완벽 위장 잦음 · 관찰 느림 · 암구호 카드 없음',
+      enemyAccuracy: 1.22, enemyReaction: 0.8, disguiseMul: 1.3, skillMul: [0.7, 1.1, 1.7], observeMul: 1.3, card: false },
+  },
+
+  // 5단계: 게임 모드 — curveStart·curveSpeed: 곡선(과 위협 단계)이 몇 분부터·몇 배 빠르게 흐르는지
+  modes: {
+    survival: { label: '생존', desc: '쓰러지거나 해임될 때까지 — 1분마다 위협 단계 상승', duration: 0, curveStart: 0, curveSpeed: 1 },
+    timed: { label: '5분 작전', desc: '5분 동안 최고 점수 — 처음부터 위협이 빠르게 오른다', duration: 300, curveStart: 0.5, curveSpeed: 1.4 },
+  },
+
+  // ------------------------------------------------------------------
   // 위협 단계 (1분마다 상승) — 레벨 1 → maxLevel 로 선형 보간되는 값들
   // ------------------------------------------------------------------
   threat: {
@@ -458,10 +493,9 @@ export const CONFIG = {
     intensityDecay: 0.045, // 초당 긴장도 감소
     intensityHigh: 0.85, // 이 이상이면 일찍 소강으로
     groupSpreadDeg: 70, // 습격 시 그룹 간 최소 방위각 차
-    // 출현 비율 (적:아군:민간인). 적 출현 1회마다 아군·민간인 '출현 크레딧'이 비율대로 쌓인다
-    mix: { enemy: 65, ally: 15, civilian: 20 },
+    // 출현 비율(적:아군:민간인)·교전 중인 적 근처에 섞여 나올 확률은 5단계 난이도 곡선(curve.phases[].mix / nearEnemy)
+    // 적 출현 1회마다 아군·민간인 '출현 크레딧'이 비율대로 쌓인다
     assaultAllyMul: 2.0, // 습격 구간엔 아군 증원 확률 증가
-    mixNearEnemyChance: [0.15, 0.6], // 위협 단계 1 → 최고: 아군·민간인이 교전 중인 적 근처에 나타날 확률
     // 돌발 조우 — 근거리 출입구·모퉁이에서 갑자기 등장 (판단 시험 구간)
     ambush: {
       interval: [38, 70],
@@ -496,13 +530,54 @@ export const CONFIG = {
 
   audio: {
     masterVolume: 0.8,
-    reverbSeconds: 1.9,
+    reverbSeconds: 1.9, // 실외 잔향 (긴 꼬리)
+    roomReverbSeconds: 0.55, // 5단계: 실내 잔향 (짧고 가까운 반사)
     maxNpcFootsteps: 6,
+    // 5단계 믹스 — 버스별 기본 음량, 우선순위(덕킹): 무전·대사가 들리는 동안 배경(환경음·음악)을 줄임
+    mix: { amb: 0.9, ui: 0.9, music: 0.55, voice: 1.0 },
+    duck: { amb: 0.5, music: 0.55, sfx: 0.12 }, // 무전·대사 중 줄이는 비율
+    indoorAmbMuffle: 1400, // 실내에선 바깥 환경음을 이 주파수 아래로 (Hz)
+    // 먼 교전 소리 층: 원거리 소총·기관총 / 중거리 교전 / 포성 (위협 단계가 오를수록 잦아짐)
+    distantLayers: { far: [5, 14], mid: [16, 34], siren: [90, 160] },
+    // 긴장 음악(합성 드론): 위협 단계·주변 적·습격·관찰/대화·저체력에 반응
+    tension: { base: 0.12, perThreat: 0.035, perEnemy: 0.1, maxEnemy: 0.35, assault: 0.22, focus: 0.18, lowHp: 0.2, rise: 1.6, fall: 6 },
   },
 
-  // 기본 설정값 (일시정지 메뉴에서 변경, localStorage 저장)
-  defaults: { sensitivity: 1.0, fov: 78, volume: 0.8, speech: false, countersignCard: true }, // countersignCard: 4단계 암구호 카드 항상 표시(기본) / 숨김(외워서 플레이)
-  limits: { sensitivity: [0.2, 3.0], fov: [60, 100], volume: [0, 1] },
+  // 5단계: 그래픽 프리셋 — 처음 실행 시 메뉴 화면 FPS 를 재서 자동 추천 (설정에서 바꿀 수 있음)
+  //   renderScale: 렌더 해상도 배율 / shadows·shadowMapSize·shadowRange: 태양 그림자 / npcShadowDist: 그림자를 드리우는 NPC 거리
+  //   particles: 파티클 방출 비율 / viewDistance: 카메라 시야 거리(먼 실루엣·연기 기둥 포함 여부) / post: 후처리(비네트·색보정·저체력 채도)
+  //   aa: 'none' | 'fxaa'(후처리 안에서) | 'msaa'(4배 멀티샘플 렌더 타깃)
+  graphics: {
+    low: { label: '낮음', renderScale: 0.75, maxPixelRatio: 1, shadows: false, shadowMapSize: 1024, shadowRange: 30, npcShadowDist: 0, particles: 0.45, viewDistance: 240, post: false, aa: 'none' },
+    medium: { label: '중간', renderScale: 1, maxPixelRatio: 1, shadows: true, shadowMapSize: 1024, shadowRange: 36, npcShadowDist: 22, particles: 0.75, viewDistance: 500, post: true, aa: 'fxaa' },
+    high: { label: '높음', renderScale: 1, maxPixelRatio: 1.5, shadows: true, shadowMapSize: 2048, shadowRange: 42, npcShadowDist: 30, particles: 1, viewDistance: 900, post: true, aa: 'msaa' },
+    autoFps: { high: 70, medium: 42 }, // 자동 추천: 메뉴 화면 평균 FPS 가 이 이상이면 그 프리셋
+  },
+  // 후처리 색보정 (그래픽 '중간' 이상)
+  post: { vignette: 0.32, saturation: 1.06, contrast: 1.05, tint: [1.03, 1.0, 0.95], lowHpDesat: 0.75, grain: 0.025 },
+
+  // 5단계 결과 화면 — 등급(S~D)은 네 항목 점수(각 0~25)의 합: 전투(분당 사살)·판단(판단 정확도)·식별(위장 사전 식별)·생존(시간/완수)
+  result: {
+    grades: [[85, 'S'], [70, 'A'], [55, 'B'], [40, 'C'], [0, 'D']],
+    kpmFull: 4, // 분당 사살이 이만큼이면 전투 25점
+    survivalFull: 480, // 생존 모드: 이 시간(초) 생존하면 생존 25점 (5분 작전은 완수 = 25점)
+    recentMax: 10,
+  },
+
+  // 기본 설정값 (설정 화면에서 변경, localStorage 저장)
+  // countersignCard: 4단계 암구호 카드 표시 (어려움 난이도는 항상 숨김) / subtitleSize: 's'|'m'|'l' / graphics: null 이면 첫 실행 자동 추천
+  defaults: {
+    sensitivity: 1.0, adsSensitivity: 0.62, fov: 78, volume: 0.8, sfxVolume: 1, voiceVolume: 1, musicVolume: 0.7,
+    speech: false, countersignCard: true, subtitleSize: 'm', colorblind: false, reduceShake: false,
+    graphics: null, difficulty: 'normal', mode: 'survival',
+  },
+  limits: { sensitivity: [0.2, 3.0], adsSensitivity: [0.2, 1.2], fov: [60, 100], volume: [0, 1], sfxVolume: [0, 1], voiceVolume: [0, 1], musicVolume: [0, 1] },
+  // 키 설정 화면에서 바꿀 수 있는 동작 (표시 이름) — 디버그(`)·일시정지(Esc)는 고정
+  rebindable: {
+    forward: '앞으로', back: '뒤로', left: '왼쪽', right: '오른쪽', sprint: '달리기', crouch: '앉기', jump: '점프',
+    reload: '재장전', flashlight: '손전등', observe: '관찰 (누르고 있기)', interact: '말 걸기 / 닫기',
+    dialog1: '질문 1', dialog2: '질문 2', dialog3: '질문 3', dialog4: '질문 4',
+  },
 
   debug: { showNavGraph: false },
 };

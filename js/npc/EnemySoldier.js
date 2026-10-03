@@ -47,8 +47,10 @@ export class EnemySoldier extends Soldier {
     this.engageDur = R.range(3.5, 6);
     this.suppressedT = 0;
 
-    this.reactRange = lerpRangeThreat(CONFIG.threat.reactionDelay, this.threat);
-    this.accMul = lerpThreat(CONFIG.threat.accuracyMul, this.threat);
+    // 5단계 난이도 프리셋: 적 반응 지연·명중률 배율
+    const diff = game.difficulty;
+    this.reactRange = lerpRangeThreat(CONFIG.threat.reactionDelay, this.threat).map((v) => v * (diff ? diff.enemyReaction : 1));
+    this.accMul = lerpThreat(CONFIG.threat.accuracyMul, this.threat) * (diff ? diff.enemyAccuracy : 1);
     this.flankChance = lerpThreat(CONFIG.threat.flankChance, this.threat);
 
     // 위장 적

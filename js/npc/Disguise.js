@@ -49,13 +49,15 @@ export function lerpRangeD(pairs, threat) {
   return [pairs[0][0] + (pairs[1][0] - pairs[0][0]) * t, pairs[0][1] + (pairs[1][1] - pairs[0][1]) * t];
 }
 
-/** 위장 프로필 생성 — 위협 단계가 오를수록 장비 단서가 줄고(2~3개 → 0~1개) 숙련도가 오른다 */
+/**
+ * 위장 프로필 생성 — 숙련도(opts.skill: 5단계 난이도 곡선이 시간 구간별 분포로 뽑음)가 장비 단서 수를 정한다
+ * (숙련 0: 2~3개, 1: 1개, 2: 0개 = 완벽 위장 — config.disguise.gearBySkill). 숙련도를 안 주면 0
+ */
 export function rollDisguiseProfile(as, threat, opts = {}) {
   const D = CONFIG.disguise;
-  const [lo, hi] = lerpRangeD(D.gearClues, threat);
-  let count = R.int(Math.round(lo), Math.round(hi));
-  // 테스트·디버그: 숙련도를 지정하면 그에 맞는 장비 단서 수
-  if (opts.skill != null) count = opts.skill >= 2 ? 0 : opts.skill === 1 ? 1 : R.int(2, 3);
+  const want = Math.max(0, Math.min(2, opts.skill ?? 0));
+  const [lo, hi] = D.gearBySkill[want];
+  const count = R.int(lo, hi);
   const role = opts.role || (R.chance(D.scoutChance[as]) ? 'scout' : 'ambusher');
   const pool = as === 'ally' ? ['curvedRifle', 'enemyHelmet', 'patch', 'tapeBand'] : ['combatBoots', 'waistBulge', 'backRifle', 'radio', 'vestStraps', 'tacticalGloves'];
   R.shuffle(pool);
@@ -572,13 +574,22 @@ export class DisguiseController {
     if (arrived || this.modeT > 14) this._setMode('hidden');
   }
 
-  // 숨어서 기다림 (플레이어에게 보이는 동안은 시간이 가지 않음) → 습격을 부르거나 다른 위치에서 다시 접근
+  // 숨어서 기다림 (플레이어에게 보이는 동안은 시간이 천천히 감) → 습격을 부르거나 다른 위치에서 다시 접근
+  // 5단계 수정: 계속 지켜보고 있으면 영영 웅크려 있던 문제 → 보이는 동안도 35% 속도로 흐르고, 40초면 무조건 움직임.
+  //   플레이어가 8m 안까지 다가와 2초 넘게 마주 보면 궁지에 몰려 정체를 드러냄
   _hidden(dt) {
     const n = this.npc;
     n.curSpeed = 0;
     n.crouchTarget = 0.6;
-    if (!n.visibleToPlayer) this.hideT -= dt;
-    if (this.hideT > 0) return;
+    this.hideT -= n.visibleToPlayer ? dt * 0.35 : dt;
+    if (this.los && this.dist < 8) {
+      this.cornerT = (this.cornerT || 0) + dt;
+      if (this.cornerT > 2) {
+        this.startReveal('cornered');
+        return;
+      }
+    } else this.cornerT = 0;
+    if (this.hideT > 0 && this.modeT < 40) return;
     if (this.calls === 0 && R.chance(CONFIG.dialogue.flee.callChance)) {
       this.closeT = 0;
       this._setMode('call');
@@ -788,6 +799,11 @@ export class DisguiseController {
   // 플레이어가 총으로 겨눔 (0.1초마다): 진짜 민간인은 곧바로 손을 듦 — 위장 적은 늦게 들거나 안 듦, 오래 겨눠지면 먼저 기습
   onAimedAt(step) {
     if (this.p.as !== 'civilian' || this.mode === 'reveal') return;
+    // 5단계: 진짜 민간인처럼 '대피 지시를 받고 가는 중'엔 겨눠도 멈추지 않음 (궁지 압박만 천천히)
+    if (this.mode === 'fakeEvac') {
+      this._panic(step * 0.5);
+      return;
+    }
     const n = this.npc;
     this.aimedT += step;
     this.notAimedT = 0;

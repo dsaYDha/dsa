@@ -47,9 +47,13 @@ void main() {
 }
 `;
 
+// 5단계 그래픽 프리셋: 파티클 방출 비율 (scalable 시스템만 — 총구 화염처럼 꼭 보여야 하는 것은 제외)
+export const FX = { particles: 1 };
+
 export class ParticleSystem {
-  constructor({ capacity = 500, texture, additive = false, fog, renderOrder = 2 }) {
+  constructor({ capacity = 500, texture, additive = false, fog, renderOrder = 2, scalable = true }) {
     this.capacity = capacity;
+    this.scalable = scalable;
     const quad = new THREE.PlaneGeometry(1, 1);
     const geo = new THREE.InstancedBufferGeometry();
     geo.index = quad.index;
@@ -104,6 +108,7 @@ export class ParticleSystem {
    * p: { x,y,z, vx,vy,vz, life, size, sizeEnd, color: THREE.Color|[r,g,b], alpha, fadeIn, gravity, drag, rot, rotSpeed }
    */
   emit(p) {
+    if (this.scalable && FX.particles < 1 && !p.keep && Math.random() > FX.particles) return;
     const i = this.cursor;
     this.cursor = (this.cursor + 1) % this.capacity;
     this.px[i] = p.x; this.py[i] = p.y; this.pz[i] = p.z;
@@ -128,6 +133,11 @@ export class ParticleSystem {
   clear() {
     this.alive.fill(0);
     this.geometry.instanceCount = 0;
+  }
+
+  dispose() {
+    this.geometry.dispose();
+    this.material.dispose();
   }
 
   update(dt, wind) {

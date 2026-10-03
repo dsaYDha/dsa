@@ -4,7 +4,11 @@
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <title>피아식별</title>
-  <meta name="description" content="전쟁 중인 도심 시가지를 배경으로 한 브라우저 1인칭 시가전" />
+  <meta name="description" content="전쟁 중인 도심 시가지를 배경으로 한 브라우저 1인칭 시가전 — 쏘기 전에 판단하라" />
+  <!-- 글꼴: 제목 Black Han Sans · 본문 IBM Plex Sans KR · 숫자 Share Tech Mono (불러오지 못하면 시스템 글꼴) -->
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Black+Han+Sans&family=IBM+Plex+Sans+KR:wght@400;500;700&family=Share+Tech+Mono&display=swap" />
   <link rel="stylesheet" href="css/style.css" />
   <!-- Three.js 는 CDN 에서 버전 고정으로 불러온다 (번들러 없음) -->
   <script type="importmap">
@@ -45,7 +49,7 @@
       </div>
       <div id="observe-hint"></div>
 
-      <!-- 4단계: 대화 메뉴 (판정 표시 없음 — 대답이 맞는지는 직접 판단) -->
+      <!-- 4단계: 대화 메뉴 (판정 표시 없음 — 대답이 맞는지는 직접 판단). 5단계: 1인칭 총과 겹치지 않게 왼쪽 아래 -->
       <div id="dialog-menu" class="hidden">
         <div class="hd"><span class="lbl">말 걸기</span> <span id="dialog-target"></span></div>
         <div id="dialog-options"></div>
@@ -54,10 +58,12 @@
       <div id="dialog-hint"></div>
 
       <div id="hud-top-left">
+        <div id="hud-mode"></div>
         <div id="hud-threat">위협 단계 1</div>
         <div id="hud-threat-pips"></div>
+        <div id="hud-phase"></div>
         <div id="hud-warnings"><span class="lbl">경고</span><span id="hud-warn-pips"></span><span id="hud-warn-text">0/3</span></div>
-        <!-- 4단계: 암구호 카드 (설정에서 숨기면 외워서 플레이) -->
+        <!-- 4단계: 암구호 카드 (설정에서 숨기면 외워서 플레이, 어려움은 항상 숨김) -->
         <div id="cs-card" class="hidden"><div class="hd">암구호 카드</div><div id="cs-body"></div></div>
       </div>
       <div id="hud-top-center">
@@ -88,7 +94,7 @@
       </div>
       <div id="banner"></div>
       <div id="hud-hint"></div>
-      <div id="subtitles"></div>
+      <div id="subtitles" data-size="m"></div>
     </div>
 
     <!-- 로딩 -->
@@ -96,89 +102,187 @@
       <div class="panel small">
         <h1 class="title">피아식별</h1>
         <p id="loading-text">불러오는 중…</p>
+        <div class="loader"><i></i></div>
       </div>
     </div>
 
     <!-- 시작 화면 -->
     <div id="screen-start" class="screen hidden">
-      <div class="panel">
-        <h1 class="title">피아식별</h1>
-        <p class="subtitle">전쟁 중인 도심 시가지 — 1인칭 시가전</p>
-        <p class="story">양측 군복은 거의 같다. 몸에 붙인 <span class="red">빨간 표식</span>(완장·헬멧 띠)이 적,
-          <span class="blue">파란 표식</span>이 아군, 표식 없는 사복은 민간인이다.
-          튀어나온 인물이 누구인지 <b>표식을 확인하고</b> 쏴라. 아군·민간인을 쏘면 큰 감점과 경고 —
-          경고 3회면 작전 해임이다.</p>
-        <div class="briefing">
-          <div class="hd">작전 브리핑</div>
-          <ul>
-            <li>적이 <span class="blue">아군</span>·<b>민간인</b>으로 위장해 섞여 든다. 표식과 옷만 믿지 마라.</li>
-            <li>진짜 아군 장비: <b>낮고 넓은 헬멧</b> · <b>직선 탄창 소총</b> · 어깨의 <b>파란 부대 패치</b></li>
-            <li>아군 부대: <b>철방패대대</b>(파란 방패) · <b>샛별중대</b>(파란 별) · <b>봉우리대대</b>(파란 삼각형) — "소속 대!"에 이 이름으로, 패치와 맞게 답한다</li>
-            <li>진짜 민간인: 비무장 · 민간 신발 · 손이 보임 · 총성에 웅크림</li>
-            <li>수상하면 <kbd>Q</kbd> 누르고 있기 = <b>관찰</b>. 총을 내리고 집중해 사실을 하나씩 알아챈다 — 그동안은 쏠 수 없다.</li>
-            <li><kbd>E</kbd> = <b>말 걸기</b> ("정지!") → <kbd>1</kbd>~<kbd>4</kbd> 로 질문. 총은 든 채로, 쏘면 대화가 끝난다. 게임은 멈추지 않는다.</li>
-            <li><b>암구호</b>: 문어를 외치면 아군은 답어로 답한다 (약 1분마다 작전 무전으로 교체 — 교체 직후엔 진짜 아군도 헷갈려 정정하기도 한다).</li>
-            <li><b>실내 확인 문답</b>(같은 건물 안에서만): 내가 외친 수 + 상대의 답 = <b>실내 기준수</b>. 예) 기준수 9, "셋!" → "여섯!". 아군끼리만 아는 수 — 가장 확실하다.</li>
-          </ul>
+      <div class="panel wide start">
+        <header class="start-head">
+          <div>
+            <h1 class="title">피아식별</h1>
+            <p class="subtitle">전쟁 중인 도심 시가지 — 1인칭 시가전</p>
+          </div>
+          <span class="version" id="version">v1.0</span>
+        </header>
+        <div class="start-grid">
+          <section class="col">
+            <p class="story">양측 군복은 거의 같다. 몸에 붙인 <span class="red">빨간 표식</span>(완장·헬멧 띠)이 적,
+              <span class="blue">파란 표식</span>이 아군, 표식 없는 사복은 민간인이다.
+              튀어나온 인물이 누구인지 <b>표식을 확인하고</b> 쏴라. 아군·민간인을 쏘면 큰 감점과 경고 —
+              경고 3회면 작전 해임이다.</p>
+            <div class="briefing">
+              <div class="hd">작전 브리핑</div>
+              <ul>
+                <li>적이 <span class="blue">아군</span>·<b>민간인</b>으로 위장해 섞여 든다. 표식과 옷만 믿지 마라.</li>
+                <li>진짜 아군 장비: <b>낮고 넓은 헬멧</b> · <b>직선 탄창 소총</b> · 어깨의 <b>파란 부대 패치</b></li>
+                <li>아군 부대: <b>철방패대대</b>(파란 방패) · <b>샛별중대</b>(파란 별) · <b>봉우리대대</b>(파란 삼각형) — "소속 대!"에 이 이름으로, 패치와 맞게 답한다</li>
+                <li>진짜 민간인: 비무장 · 민간 신발 · 손이 보임 · 총성에 웅크림</li>
+                <li><kbd data-key="observe">Q</kbd> 누르고 있기 = <b>관찰</b>. 총을 내리고 집중해 사실을 하나씩 알아챈다 — 그동안은 쏠 수 없다.</li>
+                <li><kbd data-key="interact">E</kbd> = <b>말 걸기</b> ("정지!") → <kbd data-key="dialog1">1</kbd>~<kbd data-key="dialog4">4</kbd> 로 질문. 총은 든 채로, 쏘면 대화가 끝난다. 게임은 멈추지 않는다.</li>
+                <li><b>암구호</b>: 문어를 외치면 아군은 답어로 답한다 (위협 단계가 오를 때마다 작전 무전으로 교체 — 교체 직후엔 진짜 아군도 헷갈려 정정하기도 한다).</li>
+                <li><b>실내 확인 문답</b>(같은 건물 안에서만): 내가 외친 수 + 상대의 답 = <b>실내 기준수</b>. 예) 기준수 9, "셋!" → "여섯!". 아군끼리만 아는 수 — 가장 확실하다.</li>
+              </ul>
+            </div>
+            <div class="controls" id="controls-list"></div>
+          </section>
+          <section class="col side">
+            <div class="field">
+              <div class="lbl">작전 모드</div>
+              <div class="seg" id="mode-seg"></div>
+              <p class="hint" id="mode-desc"></p>
+            </div>
+            <div class="field">
+              <div class="lbl">난이도</div>
+              <div class="seg" id="diff-seg"></div>
+              <p class="hint" id="diff-desc"></p>
+            </div>
+            <div class="seed-row">
+              <label for="seed-input">맵 시드</label>
+              <input id="seed-input" type="text" maxlength="40" spellcheck="false" autocomplete="off" />
+              <button id="btn-seed-random" class="ghost" type="button">무작위</button>
+            </div>
+            <button id="btn-start" class="primary" type="button">작전 개시</button>
+            <p id="best-record" class="best"></p>
+            <div class="row-buttons">
+              <button id="btn-open-settings" class="ghost" type="button">설정</button>
+              <button id="btn-open-records" class="ghost" type="button">기록</button>
+            </div>
+            <p class="tip">헤드폰 권장 — 측면·후방의 적은 발소리·문 소리로 먼저 들린다</p>
+            <p class="tip" id="gfx-auto-note"></p>
+          </section>
         </div>
-        <div class="controls">
-          <div><kbd>마우스</kbd> 시점</div>
-          <div><kbd>W A S D</kbd> 이동</div>
-          <div><kbd>Shift</kbd> 달리기</div>
-          <div><kbd>C</kbd> 앉기</div>
-          <div><kbd>Space</kbd> 점프</div>
-          <div><kbd>좌클릭</kbd> 사격</div>
-          <div><kbd>우클릭</kbd> 정조준</div>
-          <div><kbd>R</kbd> 재장전</div>
-          <div><kbd>F</kbd> 손전등</div>
-          <div><kbd>Q</kbd> 관찰 (누르고 있기)</div>
-          <div><kbd>E</kbd> 말 걸기 / 닫기</div>
-          <div><kbd>1</kbd>~<kbd>4</kbd> 질문 선택</div>
-          <div><kbd>Esc</kbd> 일시정지</div>
-          <div><kbd>`</kbd> 디버그</div>
-        </div>
-        <div class="seed-row">
-          <label for="seed-input">맵 시드</label>
-          <input id="seed-input" type="text" maxlength="40" spellcheck="false" autocomplete="off" />
-          <button id="btn-seed-random" class="ghost" type="button">무작위</button>
-        </div>
-        <button id="btn-start" class="primary" type="button">작전 개시</button>
-        <p id="best-record" class="best"></p>
-        <p class="tip">헤드폰 권장 — 측면·후방의 적은 발소리·문 소리로 먼저 들린다</p>
       </div>
     </div>
 
     <!-- 일시정지 -->
     <div id="screen-pause" class="screen hidden">
-      <div class="panel">
+      <div class="panel small pause">
         <h2>일시정지</h2>
         <p id="pause-note" class="note"></p>
-        <div class="settings">
-          <label>마우스 감도 <span id="set-sens-val"></span><input id="set-sens" type="range" /></label>
-          <label>시야각 (FOV) <span id="set-fov-val"></span><input id="set-fov" type="range" /></label>
-          <label>볼륨 <span id="set-vol-val"></span><input id="set-vol" type="range" /></label>
-          <label class="check"><input id="set-speech" type="checkbox" /> 무전·외침 음성 읽기 (TTS) <span id="set-speech-note"></span></label>
-          <label class="check"><input id="set-cscard" type="checkbox" /> 암구호 카드 항상 표시 <span class="note">(끄면 무전을 외워서 플레이 — 어려움)</span></label>
-        </div>
-        <div class="buttons">
+        <p id="pause-info" class="hint"></p>
+        <div class="buttons vertical">
           <button id="btn-resume" class="primary" type="button">계속하기</button>
+          <button id="btn-pause-settings" class="ghost" type="button">설정</button>
           <button id="btn-menu" class="ghost" type="button">처음으로</button>
         </div>
-        <p class="tip click-resume">화면을 클릭하면 복귀합니다</p>
+        <p class="tip click-resume">화면 빈 곳을 클릭하면 복귀합니다</p>
+      </div>
+    </div>
+
+    <!-- 5단계: 설정 (시작 화면·일시정지에서) -->
+    <div id="screen-settings" class="screen hidden">
+      <div class="panel wide settings-panel">
+        <h2>설정</h2>
+        <div class="settings-grid">
+          <section>
+            <h3>그래픽</h3>
+            <div class="seg" id="gfx-seg"></div>
+            <p class="hint" id="gfx-note"></p>
+          </section>
+          <section>
+            <h3>조작</h3>
+            <div class="settings">
+              <label>마우스 감도 <span id="set-sens-val"></span><input id="set-sens" type="range" /></label>
+              <label>정조준 감도 <span id="set-ads-val"></span><input id="set-ads" type="range" /></label>
+              <label>시야각 (FOV) <span id="set-fov-val"></span><input id="set-fov" type="range" /></label>
+              <label class="check"><input id="set-shake" type="checkbox" /> 화면 흔들림 줄이기</label>
+            </div>
+          </section>
+          <section>
+            <h3>소리</h3>
+            <div class="settings">
+              <label>전체 음량 <span id="set-vol-val"></span><input id="set-vol" type="range" /></label>
+              <label>효과음 <span id="set-sfx-val"></span><input id="set-sfx" type="range" /></label>
+              <label>음성 (무전·대사) <span id="set-voice-val"></span><input id="set-voice" type="range" /></label>
+              <label>음악 <span id="set-music-val"></span><input id="set-music" type="range" /></label>
+              <label class="check"><input id="set-speech" type="checkbox" /> 무전·외침 음성 읽기 (TTS) <span id="set-speech-note"></span></label>
+            </div>
+          </section>
+          <section>
+            <h3>화면·접근성</h3>
+            <div class="settings">
+              <div class="field"><div class="lbl">자막 크기</div><div class="seg" id="sub-seg"></div></div>
+              <label class="check"><input id="set-colorblind" type="checkbox" /> 색각 보조 무늬 <span class="note">(적 표식 X 무늬 · 아군 표식 세로 줄무늬)</span></label>
+              <label class="check"><input id="set-cscard" type="checkbox" /> 암구호 카드 표시 <span class="note">(끄면 무전을 외워서 — 어려움은 항상 숨김)</span></label>
+            </div>
+          </section>
+          <section class="span2">
+            <h3>키 설정 <button id="btn-keys-reset" class="ghost tiny" type="button">기본값</button></h3>
+            <p class="hint">바꿀 동작을 누른 뒤 새 키를 누르세요 (Esc 취소). 이미 쓰는 키면 서로 맞바꿉니다.</p>
+            <div id="keys-list" class="keys-grid"></div>
+          </section>
+        </div>
+        <div class="buttons">
+          <button id="btn-settings-back" class="primary" type="button">돌아가기</button>
+        </div>
+      </div>
+    </div>
+
+    <!-- 5단계: 기록 (모드 × 난이도별 최고 기록 + 최근 10판) -->
+    <div id="screen-records" class="screen hidden">
+      <div class="panel wide">
+        <h2>기록</h2>
+        <h3>최고 기록</h3>
+        <div id="records-boards" class="table-wrap"></div>
+        <h3>최근 10판</h3>
+        <div id="records-recent" class="table-wrap"></div>
+        <div class="buttons">
+          <button id="btn-records-back" class="primary" type="button">돌아가기</button>
+        </div>
       </div>
     </div>
 
     <!-- 결과 -->
     <div id="screen-result" class="screen hidden">
-      <div class="panel">
-        <h2 id="result-title">전사</h2>
-        <p id="result-reason" class="reason"></p>
-        <div id="result-stats" class="stats"></div>
+      <div class="panel wide result">
+        <header class="result-head">
+          <div class="grade" id="result-grade">D</div>
+          <div class="head-main">
+            <h2 id="result-title">전사</h2>
+            <p id="result-reason" class="reason"></p>
+            <div class="score-line"><span id="result-score">0</span><em id="result-newrec"></em></div>
+          </div>
+          <div class="title-badge">
+            <div class="k">칭호</div>
+            <div id="result-badge" class="v">-</div>
+            <div id="result-badge-desc" class="d"></div>
+          </div>
+        </header>
+        <p id="result-meta" class="meta"></p>
+        <div id="result-parts" class="grade-parts"></div>
+        <div class="result-grid">
+          <section><h3>전투</h3><div class="stats" id="result-combat"></div></section>
+          <section><h3>판단</h3><div class="stats" id="result-judgment"></div></section>
+        </div>
+        <section><h3>결정적 순간</h3><ol id="result-moments" class="moments"></ol></section>
+        <section><h3>타임라인</h3><div id="result-timeline" class="timeline"></div></section>
+        <section><h3>최근 기록</h3><div id="result-recent" class="table-wrap"></div></section>
         <p id="result-best" class="best"></p>
         <div class="buttons">
           <button id="btn-restart" class="primary" type="button">다시 시작</button>
           <button id="btn-result-menu" class="ghost" type="button">처음으로</button>
         </div>
+      </div>
+    </div>
+
+    <!-- 5단계: 터치 전용 기기 안내 (키보드·마우스가 필요한 게임) -->
+    <div id="touch-notice" class="screen hidden">
+      <div class="panel small">
+        <h2>PC 키보드·마우스가 필요합니다</h2>
+        <p class="note-text">이 게임은 키보드(WASD)와 마우스(포인터 고정)로 조작합니다.<br>데스크톱·노트북 브라우저에서 접속해 주세요.</p>
+        <button id="btn-touch-continue" class="ghost" type="button">그래도 둘러보기</button>
       </div>
     </div>
 

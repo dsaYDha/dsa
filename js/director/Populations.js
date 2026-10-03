@@ -5,6 +5,7 @@ import { CONFIG, lerpRangeThreat } from '../config.js';
 import { gameRand as R } from '../core/Random.js';
 import { lerpD } from '../npc/Disguise.js';
 
+
 // ---------------------------------------------------------------------
 // 아군: 적 출현 크레딧이 쌓이면 증원 분대 (습격 구간엔 적립 2배), 시작 직후 분대 하나
 // ---------------------------------------------------------------------
@@ -178,8 +179,9 @@ export class DisguisePopulation {
     this.infiltrations = 0;
   }
 
+  // 5단계: 난이도 곡선 구간이 위장 적을 허용할 때만 (첫 1분 '적응' 구간엔 없음)
   get enabled() {
-    return this.d.threat >= CONFIG.disguise.fromThreat;
+    return this.d.curve.maxDisguised > 0;
   }
 
   canSpawn() {
@@ -236,9 +238,8 @@ export class DisguisePopulation {
 
   // 오판 유도용 진짜 행동: 아군 'straggler'|'escort', 민간인 'frozen'|'helpSeeker' (없으면 null)
   rollDecoy(kind) {
-    if (!this.enabled) return null;
-    const D = CONFIG.disguise.decoy;
-    if (!R.chance(lerpD(kind === 'ally' ? D.allyChance : D.civilianChance, this.d.threat))) return null;
+    const c = this.d.curve;
+    if (!R.chance(kind === 'ally' ? c.decoyAlly : c.decoyCiv)) return null;
     if (kind === 'ally') return R.chance(0.5) ? 'straggler' : 'escort';
     return R.chance(0.5) ? 'frozen' : 'helpSeeker';
   }

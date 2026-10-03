@@ -2,6 +2,7 @@
 // Octree 에는 정적 지형만 넣는다. 총알·시야 레이 판정은 거리 제한 순회로 빠르게 처리.
 import * as THREE from 'three';
 import { Octree } from 'three/addons/math/Octree.js';
+import { Capsule } from 'three/addons/math/Capsule.js';
 
 const MAX_DEPTH = 9;
 const MAX_TRIS = 10;
@@ -9,6 +10,7 @@ const MIN_HALF = 0.6;
 
 const _v1 = new THREE.Vector3();
 const _v2 = new THREE.Vector3();
+const _stack = []; // 순회 스택 재사용 (호출마다 배열을 만들지 않음 — 재진입 없음)
 
 // 분할 깊이·최소 크기 제한을 둔 Octree (큰 삼각형이 많은 도시 지형용)
 class CityOctree extends Octree {
@@ -41,7 +43,104 @@ class CityOctree extends Octree {
     }
     return this;
   }
+
+  // 5단계 최적화: 플레이어 캡슐 충돌(물리 하위 스텝마다 호출)을 할당 없이 — three 의 Octree 와 같은 계산, 결과 객체·배열을 재사용
+  // 반환 객체는 다음 호출 때 덮어쓴다 (호출한 쪽이 곧바로 쓰고 버림)
+  capsuleIntersect(capsule) {
+    _cap.copy(capsule);
+    const tris = _capTris;
+    tris.length = 0;
+    this.getCapsuleTriangles(_cap, tris);
+    let hit = false;
+    for (let i = 0; i < tris.length; i++) {
+      if (this.triangleCapsuleIntersect(_cap, tris[i])) {
+        hit = true;
+        _cap.translate(_triRes.normal.multiplyScalar(_triRes.depth));
+      }
+    }
+    if (!hit) return false;
+    const cv = _cap.getCenter(_capRes.normal).sub(capsule.getCenter(_c1));
+    _capRes.depth = cv.length();
+    cv.normalize();
+    return _capRes;
+  }
+
+  triangleCapsuleIntersect(capsule, triangle) {
+    triangle.getPlane(_plane);
+    const d1 = _plane.distanceToPoint(capsule.start) - capsule.radius;
+    const d2 = _plane.distanceToPoint(capsule.end) - capsule.radius;
+    if ((d1 > 0 && d2 > 0) || (d1 < -capsule.radius && d2 < -capsule.radius)) return false;
+    const delta = Math.abs(d1 / (Math.abs(d1) + Math.abs(d2)));
+    const ip = _c1.copy(capsule.start).lerp(capsule.end, delta);
+    if (triangle.containsPoint(ip)) {
+      _triRes.normal.copy(_plane.normal);
+      _triRes.point.copy(ip);
+      _triRes.depth = Math.abs(Math.min(d1, d2));
+      return _triRes;
+    }
+    const r2 = capsule.radius * capsule.radius;
+    _line1.set(capsule.start, capsule.end);
+    for (let i = 0; i < 3; i++) {
+      const a = i === 0 ? triangle.a : i === 1 ? triangle.b : triangle.c;
+      const b = i === 0 ? triangle.b : i === 1 ? triangle.c : triangle.a;
+      _line2.set(a, b);
+      lineToLineClosestPoints(_line1, _line2, _p1, _p2);
+      if (_p1.distanceToSquared(_p2) < r2) {
+        _triRes.normal.copy(_p1).sub(_p2).normalize();
+        _triRes.point.copy(_p2);
+        _triRes.depth = capsule.radius - _p1.distanceTo(_p2);
+        return _triRes;
+      }
+    }
+    return false;
+  }
 }
+
+// three/addons Octree.js 와 같은 두 선분 사이 최근접점
+const _t1 = new THREE.Vector3();
+const _t2 = new THREE.Vector3();
+const _t3 = new THREE.Vector3();
+function lineToLineClosestPoints(line1, line2, target1, target2) {
+  const r = _t1.copy(line1.end).sub(line1.start);
+  const s = _t2.copy(line2.end).sub(line2.start);
+  const w = _t3.copy(line2.start).sub(line1.start);
+  const a = r.dot(s);
+  const b = r.dot(r);
+  const c = s.dot(s);
+  const d = s.dot(w);
+  const e = r.dot(w);
+  let t1;
+  let t2;
+  const divisor = b * c - a * a;
+  if (Math.abs(divisor) < 1e-10) {
+    const d1 = -d / c;
+    const d2 = (a - d) / c;
+    if (Math.abs(d1 - 0.5) < Math.abs(d2 - 0.5)) {
+      t1 = 0;
+      t2 = d1;
+    } else {
+      t1 = 1;
+      t2 = d2;
+    }
+  } else {
+    t1 = (d * a + e * c) / divisor;
+    t2 = (t1 * a - d) / c;
+  }
+  t2 = Math.max(0, Math.min(1, t2));
+  t1 = Math.max(0, Math.min(1, t1));
+  target1.copy(r).multiplyScalar(t1).add(line1.start);
+  target2.copy(s).multiplyScalar(t2).add(line2.start);
+}
+const _cap = new Capsule();
+const _capTris = [];
+const _capRes = { normal: new THREE.Vector3(), depth: 0 };
+const _triRes = { normal: new THREE.Vector3(), point: new THREE.Vector3(), depth: 0 };
+const _plane = new THREE.Plane();
+const _line1 = new THREE.Line3();
+const _line2 = new THREE.Line3();
+const _c1 = new THREE.Vector3();
+const _p1 = new THREE.Vector3();
+const _p2 = new THREE.Vector3();
 
 const _ray = new THREE.Ray();
 const _hit = new THREE.Vector3();
@@ -66,6 +165,8 @@ export class CollisionWorld {
     this.octree = new CityOctree();
     this.triCount = 0;
     this.built = false;
+    this.losCalls = 0; // 5단계 디버그: 시야 판정·레이캐스트 호출 수 (초당 값은 DebugOverlay)
+    this.rayCalls = 0;
   }
 
   addTriangle(a, b, c, surface) {
@@ -149,11 +250,14 @@ export class CollisionWorld {
    * @returns {null | {distance, point, normal, surface}}
    */
   raycast(origin, dir, maxDist, out) {
+    this.rayCalls++;
     _ray.origin.copy(origin);
     _ray.direction.copy(dir);
     let best = maxDist;
     let bestTri = null;
-    const stack = [this.octree];
+    const stack = _stack;
+    stack.length = 0;
+    stack.push(this.octree);
     while (stack.length) {
       const node = stack.pop();
       const subs = node.subTrees;
@@ -193,6 +297,7 @@ export class CollisionWorld {
 
   // 두 점 사이가 막혀 있는지 (시야 판정용, 할당 없음)
   segmentBlocked(a, b) {
+    this.losCalls++;
     const dir = _v1.subVectors(b, a);
     const len = dir.length();
     if (len < 1e-4) return false;
@@ -200,7 +305,9 @@ export class CollisionWorld {
     _ray.origin.copy(a);
     _ray.direction.copy(dir);
     const maxD2 = len * len;
-    const stack = [this.octree];
+    const stack = _stack;
+    stack.length = 0;
+    stack.push(this.octree);
     while (stack.length) {
       const node = stack.pop();
       const subs = node.subTrees;

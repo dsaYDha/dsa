@@ -35,6 +35,9 @@ export class ObservationSystem {
     this.factsFound = 0;
     this.anomaliesFound = 0;
     this.usedOnce = false;
+    this.sessions = 0; // 5단계 결과 통계: 관찰 모드를 쓴 횟수
+    this._avail = [];
+    this._scanT = 0;
     this._outlined = new Set();
     for (const n of this.game.npcs ? this.game.npcs.list : []) n.rig.setHighlight(0);
   }
@@ -55,6 +58,8 @@ export class ObservationSystem {
       g.audio.observe(true);
       g.events.emit(Events.OBSERVE_START, { first: !this.usedOnce });
       this.usedOnce = true;
+      this.sessions++;
+      this._scanT = 0;
     } else if (!want && this.active) {
       this.active = false;
       this.raiseT = 0;
@@ -99,44 +104,43 @@ export class ObservationSystem {
     return true;
   }
 
+  // 5단계 최적화: 대상 찾기(레이캐스트·시야 판정)는 0.1초마다, 사실 목록은 그때와 사실을 찾을 때만 다시 계산
   _observe(dt) {
     const O = CONFIG.observe;
     const g = this.game;
-    const a = g.npcs.getAimedNPC({ maxDistance: O.maxDistance, coneDeg: O.coneDeg });
-    const npc = a && a.npc.alive ? a.npc : null;
-    if (npc !== this.target) {
-      this.target = npc;
-      this.progress = 0;
+    this._scanT = (this._scanT || 0) - dt;
+    if (this._scanT <= 0 || (this.target && !this.target.alive)) {
+      this._scanT = 0.1;
+      const a = g.npcs.getAimedNPC({ maxDistance: O.maxDistance, coneDeg: O.coneDeg });
+      const npc = a && a.npc.alive ? a.npc : null;
+      if (npc !== this.target) {
+        this.target = npc;
+        this.progress = 0;
+      }
+      this.distance = npc ? a.distance : 0;
+      this._evaluate();
     }
+    const npc = this.target;
     if (!npc) {
       this.status = '대상 없음 — 화면 가운데에 인물을 두세요';
       return;
     }
     this.memoNpc = npc;
     this.memoT = O.memoLinger;
-    const d = a.distance;
-    this.distance = d;
-    const ob = npc.getObserved();
-    const lit = this._lit(npc, d);
-    const gearOK = lit && d <= O.gearMaxDist;
-    const all = npc.observationFacts();
-    const near = d <= O.gearMaxDist;
-    const angled = (f) => f.kind !== 'gear' || this._viewOK(npc, f.view);
-    const avail = all.filter((f) => !ob.found.has(f.key) && angled(f) && (f.kind === 'behavior' || gearOK || (f.glow && near)));
-    const gearLeft = all.some((f) => !ob.found.has(f.key) && f.kind === 'gear' && angled(f) && !(f.glow && near));
-    if (!avail.length) {
+    if (!this._avail.length) {
       this.progress = 0;
-      if (gearLeft && !lit) this.status = '어두워서 장비가 안 보임 — 손전등(F)';
-      else if (gearLeft) this.status = '너무 멀어서 장비가 안 보임';
-      else this.status = '더 알아낸 것 없음';
       return;
     }
-    this.status = gearLeft && !gearOK ? (lit ? '멀어서 장비는 안 보임' : '어두워서 장비가 안 보임 — 손전등(F)') : '관찰 중…';
-    const interval = O.factInterval * (1 + Math.max(0, d - O.nearDist) * O.slowPerMeter);
+    const d = this.distance;
+    const mul = g.difficulty ? g.difficulty.observeMul : 1; // 난이도: 관찰 속도
+    const interval = O.factInterval * (1 + Math.max(0, d - O.nearDist) * O.slowPerMeter) * mul;
     this.progress += dt / interval;
     if (this.progress < 1) return;
     this.progress = 0;
-    const fact = R.pick(avail);
+    this._evaluate();
+    if (!this._avail.length) return;
+    const ob = npc.getObserved();
+    const fact = R.pick(this._avail);
     ob.found.set(fact.key, fact);
     this.lastFact = fact;
     this.factsFound++;
@@ -147,6 +151,31 @@ export class ObservationSystem {
     }
     g.audio.notice(fact.anomalous);
     g.events.emit(Events.OBSERVE_FACT, { npc, fact, distance: d });
+    this._evaluate();
+  }
+
+  // 지금 대상에게서 알아챌 수 있는 사실 목록 + 상태 문구
+  _evaluate() {
+    const O = CONFIG.observe;
+    const npc = this.target;
+    this._avail = [];
+    if (!npc) return;
+    const d = this.distance;
+    const ob = npc.getObserved();
+    const lit = this._lit(npc, d);
+    const gearOK = lit && d <= O.gearMaxDist;
+    const all = npc.observationFacts();
+    const near = d <= O.gearMaxDist;
+    const angled = (f) => f.kind !== 'gear' || this._viewOK(npc, f.view);
+    this._avail = all.filter((f) => !ob.found.has(f.key) && angled(f) && (f.kind === 'behavior' || gearOK || (f.glow && near)));
+    const gearLeft = all.some((f) => !ob.found.has(f.key) && f.kind === 'gear' && angled(f) && !(f.glow && near));
+    if (!this._avail.length) {
+      if (gearLeft && !lit) this.status = '어두워서 장비가 안 보임 — 손전등(F)';
+      else if (gearLeft) this.status = '너무 멀어서 장비가 안 보임';
+      else this.status = '더 알아낸 것 없음';
+      return;
+    }
+    this.status = gearLeft && !gearOK ? (lit ? '멀어서 장비는 안 보임' : '어두워서 장비가 안 보임 — 손전등(F)') : '관찰 중…';
   }
 
   // 이상 단서를 찾은 대상: 노란 윤곽 (8초, 끝날 무렵 깜박임)

@@ -3,17 +3,18 @@
 // · 플레이어 시야 안에서 갑자기 생성 금지: 시야 밖·가려진 곳에서 생성 후 걸어 나오기/창가에 나타나기/엄폐물에서 튀어나오기
 // · 측면·후방 출현은 발소리·잔해·문 소리를 먼저 들려줌
 // · 1분마다 위협 단계 상승
-// · 2단계: 아군·민간인도 같은 방식·같은 장소로 등장 (출현 비율 적 65 / 아군 15 / 민간인 20, config.director.mix)
+// · 2단계: 아군·민간인도 같은 방식·같은 장소로 등장 (출현 비율은 5단계 난이도 곡선 config.curve — 적 78→62 / 아군 10→16 / 민간인 12→22)
 //   적 출현 1회마다 아군·민간인 '출현 크레딧'이 비율대로 쌓이고 각 인구(Populations.js)가 소비한다.
 //   돌발 조우(근거리 8m 이내, 적 50 / 아군 25 / 민간인 25)는 AmbushEvent 가 담당
 // · 확장: registerPopulation() 으로 인구, registerFactory() 로 생성기를 붙인다
 // · 3단계: 위장 적(DisguisePopulation) — 위협 2단계부터 아군·민간인 출현 크레딧의 일부(10→30% / 10→25%)가
 //   '가짜' 크레딧으로 쌓여 같은 출현 지점·방식으로 위장 적이 등장. 동시 상한 2~3. 습격 구간 혼란을 틈탄 접근,
 //   정찰형의 습격 요청(callInAssault). 오판 유도용 진짜 행동(낙오병·동행·얼어붙음·도움 요청)도 비슷한 빈도로 섞는다
+// · 5단계: 난이도 곡선(game.difficulty — config.curve) — 위협 단계·출현 비율·위장 비율·숙련도 분포·동시 상한을 구간별로.
+//   this.curve 는 매 프레임 갱신되는 현재 구간 값 (구간이 바뀌면 CURVE_PHASE 이벤트 → HUD 배너)
 import * as THREE from 'three';
-import { CONFIG, lerpRangeThreat, lerpThreat } from '../config.js';
+import { CONFIG, lerpRangeThreat } from '../config.js';
 import { AllyPopulation, CivilianPopulation, AmbushEvent, DisguisePopulation } from './Populations.js';
-import { lerpD } from '../npc/Disguise.js';
 import { Events } from '../core/EventBus.js';
 import { gameRand as R } from '../core/Random.js';
 
@@ -120,10 +121,7 @@ class HostilePopulation {
       }
       case Phase.ASSAULT: {
         let alive = 0;
-        for (const id of this.waveIds) {
-          const n = d.game.npcs.list.find((x) => x.id === id);
-          if (n && n.alive) alive++;
-        }
+        for (const n of d.game.npcs.list) if (n.alive && this.waveIds.has(n.id)) alive++;
         const allSpawned = !d.pending.some((p) => p.wave);
         if ((allSpawned && alive <= 1 && this.phaseElapsed > 4) || this.phaseT <= 0) {
           this._enter(Phase.RELAX, D.relaxMaxTime);
@@ -224,7 +222,10 @@ export class SpawnDirector {
 
   reset() {
     this.elapsed = 0;
-    this.threat = 1;
+    const diff = this.game.difficulty;
+    this.curve = diff.sample(diff.curveMinutes(0));
+    this.curveIndex = this.curve.index;
+    this.threat = diff.threatLevel(0);
     this.intensity = 0;
     this.pending.length = 0;
     this.spawnLog.length = 0;
@@ -250,11 +251,11 @@ export class SpawnDirector {
     return this.game.npcs.countActive('enemy') - this.game.npcs.countDisguised();
   }
 
-  // 종류별 동시 활성 상한 (적은 위협 단계별, 위장 적은 2~3)
+  // 종류별 동시 활성 상한 (적은 위협 단계별, 위장 적은 곡선 구간별 0~3)
   capFor(kind) {
     if (kind === 'ally') return CONFIG.ally.maxActive;
     if (kind === 'civilian') return CONFIG.civilian.maxActive;
-    if (kind === 'disguised') return this.threat >= CONFIG.disguise.fromThreat ? Math.round(lerpD(CONFIG.disguise.maxActive, this.threat)) : 0;
+    if (kind === 'disguised') return this.curve.maxDisguised;
     return this.cap;
   }
 
@@ -270,15 +271,14 @@ export class SpawnDirector {
     return c;
   }
 
-  // 적이 등장할 때마다 아군·민간인 출현 크레딧 적립 (비율 유지)
-  // 3단계: 위협 2단계부터 그중 일부가 '가짜'(위장 적) 크레딧 — 아군처럼 보이는 인물의 10→30%, 민간인처럼 보이는 인물의 10→25%
+  // 적이 등장할 때마다 아군·민간인 출현 크레딧 적립 (곡선 구간의 비율 유지)
+  // 3단계: 그중 일부가 '가짜'(위장 적) 크레딧 — 5단계 곡선의 fakeAlly·fakeCiv (위장 등장 12/10% → 고강도 28/24%, 난이도 배율)
   _accrueCredits() {
-    const m = CONFIG.director.mix;
-    const D = CONFIG.disguise;
+    const c = this.curve;
+    const m = c.mix;
     const allyMul = this.hostile.phase === 'assault' ? CONFIG.director.assaultAllyMul : 1;
-    const on = this.threat >= D.fromThreat;
-    const fa = on ? lerpD(D.allyChance, this.threat) : 0;
-    const fc = on ? lerpD(D.civilianChance, this.threat) : 0;
+    const fa = c.maxDisguised > 0 ? c.fakeAlly : 0;
+    const fc = c.maxDisguised > 0 ? c.fakeCiv : 0;
     const ally = (m.ally / m.enemy) * allyMul;
     const civ = m.civilian / m.enemy;
     this.credits.ally += ally * (1 - fa);
@@ -288,9 +288,15 @@ export class SpawnDirector {
   }
 
   update(dt) {
-    const T = CONFIG.threat;
+    const diff = this.game.difficulty;
     this.elapsed += dt;
-    const lvl = Math.min(T.maxLevel, 1 + Math.floor(this.elapsed / T.secondsPerLevel));
+    const minutes = diff.curveMinutes(this.elapsed);
+    this.curve = diff.sample(minutes);
+    if (this.curve.index !== this.curveIndex) {
+      this.curveIndex = this.curve.index;
+      this.game.events.emit(Events.CURVE_PHASE, { index: this.curve.index, name: this.curve.name, note: this.curve.note });
+    }
+    const lvl = diff.threatLevel(this.elapsed);
     if (lvl !== this.threat) {
       this.threat = lvl;
       this.game.events.emit(Events.THREAT_LEVEL, { level: lvl });
@@ -385,7 +391,7 @@ export class SpawnDirector {
     let pickOpts = { distRange: opts.distRange };
     if (opts.nearPos) pickOpts = { ...pickOpts, nearPos: opts.nearPos, nearRadius: opts.nearRadius || 16 };
     // 위협 단계가 오를수록 교전 중인 적 근처에 섞여 나옴 (사선 위 민간인, 적과 근접 교전 중인 아군)
-    else if (opts.nearEnemy !== false && R.chance(lerpThreat(CONFIG.director.mixNearEnemyChance, this.threat))) {
+    else if (opts.nearEnemy !== false && R.chance(this.curve.nearEnemy)) {
       const engaged = game.npcs.byApparent('enemy').filter((e) => e.aware && e.hasLOS);
       if (engaged.length) {
         const e = R.pick(engaged);
@@ -620,7 +626,8 @@ export class SpawnDirector {
       active: this.activeHostiles(),
       pending: this.pending.length,
       intensity: this.intensity,
-      nextLevelIn: CONFIG.threat.secondsPerLevel - (this.elapsed % CONFIG.threat.secondsPerLevel),
+      nextLevelIn: this.game.difficulty.secondsToNextLevel(this.elapsed),
+      curve: `${this.curve.name}(${this.curve.index + 1}/${CONFIG.curve.phases.length})`,
       lastSpawns: this.spawnLog.slice(-4),
       counts: { enemy: this.activeCount('enemy'), ally: this.activeCount('ally'), civilian: this.activeCount('civilian') },
       caps: { enemy: this.cap, ally: CONFIG.ally.maxActive, civilian: CONFIG.civilian.maxActive },

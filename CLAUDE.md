@@ -19,7 +19,7 @@
 | 2 | 민간인·아군 NPC, 오인 사격 페널티 | **완료** |
 | 3 | 위장 적, 시각 단서 관찰 시스템 | **완료** |
 | 4 | 말 걸기·구두 문답 (암구호, 실내 확인 문답, "손 들어") | **완료** |
-| 5 | 난이도 곡선, 결과 화면, 연출·사운드 마무리, 최적화 | 예정 |
+| 5 | 난이도 곡선, 결과 화면, 연출·사운드 마무리, 최적화 | **완료 (v1.0)** |
 
 ### 1단계에서 구현한 것
 
@@ -112,10 +112,43 @@
 - **디버그**: 암구호 현재/이전·기준수·교체 횟수, 대화(없으면 조준) 대상이 아는 것(현재/이전 암구호·기준수·부대명), 문답 통계
 - 다음 단계 준비: `CONFIG.dialogue` 한곳에 문답 수치, `Game.debugSpawn` 테스트 생성 도우미
 
+### 5단계에서 구현한 것 (v1.0)
+
+- **전체 점검·버그 정리**
+  - 메모리 누수 3건: ① NPC 뼈대의 뼈 텍스처(GPU)가 해제되지 않음 → `skeleton.dispose()` ② 사복 조합마다 스킨 지오메트리가 영구 캐시 → 참조 수 캐시 + 쉬는 것 24개만 남기고 dispose
+    ③ NPC 재질을 매번 새로 만들고 버림 → 재질 풀(셰이더 프로그램도 유지돼 재시작 직후 재컴파일 끊김 없음). 이펙트·분위기(파티클·하늘·불빛)도 시드 변경 시 dispose
+  - 재시작 완전 초기화 점검·보강: 무기 모델(반동·탄피), 플레이어 이동·흔들림 상태, 소리(사망 먹먹함·긴장 음악), 후처리, 판 기록 — 자동 테스트로 확인
+  - 4단계 남은 문제: 도주해 숨은 위장 적이 계속 보고 있으면 영영 웅크리던 문제(보이는 동안 35% 속도 + 40초 상한 + 8m 안 2초 마주 보면 궁지 정체 드러냄),
+    대화 메뉴가 1인칭 총과 겹침(왼쪽 아래로), "대피하세요" 지시를 받은 민간인(진짜·위장)이 겨누면 멈추던 문제
+  - 터치 전용 기기 안내("PC 키보드·마우스가 필요합니다"), 탭 숨김·포인터 고정 해제(대화·관찰 중 포함)·창 크기 변경·델타 상한 확인
+- **난이도 곡선·프리셋·모드** (`game/Difficulty.js`, `config.curve / difficulty / modes`)
+  - 시간 구간별 명시: 0~1분 적응(적 78% · 위장 없음) → 1~3분 위장 등장(숙련 0 위주) → 3~6분 혼전(섞인 습격·숙련 1 증가) → 6분~ 고강도(완벽 위장 35%, 유지).
+    출현 비율·위장 비율·숙련도 분포·위장 상한·오판 유도 행동 비율·혼전 확률을 구간마다 (기존 위협 단계 보간값을 대체). 구간 변경 시 배너 + 신호음
+  - 프리셋 쉬움/보통/어려움: 적 명중률·반응, 위장 비율, 숙련도 분포(완벽 위장 비율), 관찰 속도, 암구호 카드 허용
+  - 모드: 생존 / **5분 작전**(곡선이 0.5분부터 1.4배 빠르게 — 5분 뒤 위협 8단계, 시간 종료 = 작전 완료). 기록은 모드 × 난이도별 + 최근 10판
+  - **밸런스 시뮬레이션** `tools/balance-sim.mjs` (Node, 3D 없음): 난사형·균형형·신중형 비교 → 모든 모드·난이도에서 균형형 > 신중형 > 난사형 (아래 "밸런스 조정 방법")
+- **결과 화면 개편** (`game/RunRecorder.js`, `ui/Menus.js`): 등급 S~D(전투·판단·식별·생존 각 25점), 칭호, 신기록, 전투 통계, 판단 통계(판단 정확도·위장 적 사전 식별률·오인 사격·기습·평균 판단 시간·관찰/문답 사용),
+  결정적 순간 3개, 타임라인 SVG(점수 선 + 사살·식별·오인 사격·기습·위협 단계), 최근 10판
+- **연출·사운드**: 버스 믹스(효과음·환경음·UI·음성·음악) + 무전·대사 덕킹, 실내/실외 잔향 교차 + 실내에서 바깥 소리 먹먹하게, 먼 교전 소리 층(원거리·중거리 교전·사이렌),
+  합성 긴장 드론(위협 단계·근처 교전 중인 적·습격·관찰/대화·저체력에 반응, 고조되면 맥동), 신호음(습격 시작·암구호 교체·곡선 구간), 사망 시 먹먹함 + 귀울림.
+  탄피 배출, 총구 연기, 근처 탄착 흙먼지 + 흔들림, 저체력 채도 감소·붉은 맥동, 사망 회색 페이드, 창문 불빛·불길 깜박임, 후처리(비네트·색보정·그레인·FXAA/MSAA)
+- **UI 통일**: 군용 톤(글꼴 Black Han Sans·IBM Plex Sans KR·Share Tech Mono, 색·간격), 화면 전환 애니메이션, 시작 화면 v1.0, 설정·기록 화면
+- **설정·접근성**: 그래픽 프리셋(낮음·중간·높음, 첫 실행 메뉴 FPS 측정 자동 추천), 감도·정조준 감도·FOV, 음량 4종, 자막 크기, 키 설정(맞바꿈·기본값), 색각 보조 무늬(적 X·아군 세로 줄무늬), 흔들림 줄이기, TTS
+- **최적화**: NPC 애니메이션·AI 거리 LOD, 지오메트리 참조 공유·재질 풀, 관찰 대상 탐색 10Hz, 충돌 순회 스택·캡슐 충돌 결과 재사용(할당 없음), 디버그 오버레이에 성능·메모리 지표
+- **자동 테스트** `tests/` (Playwright): 스모크·규칙·장시간(메모리) — 아래 "실행·테스트"
+
 ## 실행·테스트
 
 - 실행: 저장소 루트에서 `python3 -m http.server 8000` → `http://localhost:8000` (자세한 내용은 README.md)
-- URL 옵션: `?seed=문자열`, `?nolock`(포인터 락 없이 진행 — 자동화 테스트용)
+- URL 옵션: `?seed=문자열`, `?nolock`(포인터 락 없이 진행 — 자동화 테스트용), `?gfx=low|medium|high`(그래픽 프리셋 강제 — 첫 실행 자동 추천 생략)
+- **5단계 자동 테스트** (`tests/`, Playwright + 헤드리스 Chromium, 정적 서버 내장, `THREE_DIR=` 로 오프라인 three 사본 라우팅, `PLAYWRIGHT_PATH=` 로 다른 곳에 설치된 playwright):
+  - `node tests/smoke.mjs` — 시작(모드·난이도) → 봇 90초 → 게임 오버 → 결과(등급·칭호·통계·타임라인·최근 기록) → 재시작 완전 초기화(점수·콤보·경고·디렉터·암구호·기록·체력·탄약·무전 두절)
+    → 5분 작전 완수('작전 완료') → 예외(관찰·대화 중 일시정지 복귀, 탭 숨김 자동 일시정지, 창 크기 변경 시 카메라·후처리 버퍼) → 설정(그래픽 프리셋·키 바꾸기·색각 보조)
+    → 첫 실행 그래픽 자동 추천 → 터치 기기 안내 → 콘솔 에러·경고 0건. 화면 캡처 `tests/out/`
+  - `node tests/rules.mjs` — 난이도 곡선(첫 1분 위장 상한 0, 1분 뒤 '위장 등장'), 진짜 아군 문답(현재 답어·부대·패치), 위장 아군 숙련 0/1/2(장비 단서 수·실패/유출 답어/현재 답어·부대),
+    민간인 손 들기·신분증, 위장 민간인 신분증 분실, 사전 식별 + 근거 점수, 아군 피격 −200·사살 경고·콤보 잠금, 장비 단서는 진짜에게 없음, 난이도 명중률
+  - `node tests/soak.mjs [분=20] [재시작=10]` — 장시간·반복 재시작 메모리(힙·지오메트리·텍스처·셰이더)와 갱신 CPU 시간
+  - `node tools/balance-sim.mjs [판 수] [모드|all] [난이도|all]` — 밸런스 시뮬레이션 (아래)
 - 콘솔에서 `window.__game` 으로 모든 시스템에 접근할 수 있다.
   - 시뮬레이션만 빠르게 돌리기: `__game._updatePlaying(1/30)` 반복 호출 (렌더 없이 AI·디렉터 진행)
   - 위치 이동: `__game.debugTeleport(x, y, z, yaw)`
@@ -152,20 +185,29 @@
   암구호 교체(작전 무전 2줄·카드 깜박임·취소선), 도주→숨기→습격 요청/재접근, 총 내린 위장 아군은 85° 시선을 돌리면 기습(안 내린 경우 10초간 없음).
   말 거는 봇 소크(실제 디렉터 + 12초마다 근처 생성, 6분·2시드): 에러 0. 성능: NPC 31명 + 대화 중(신분증) + 관찰 모드 업데이트 약 1.4ms/프레임
   (같은 페이지 기준 대화 없음 0.9ms), 드로우콜 196~222(신분증은 보일 때만 +1).
+- 5단계 검증(같은 Playwright 환경): 위 `tests/` 3종 통과 + 1~4단계 회귀 스크립트(8개 건물 계단 보행·창밖 시야, 사망→결과→재시작, 오인 사격→작전 해임,
+  관찰 모드·사전 식별 점수, 위장 적 기습/정찰/진짜 행동, 문답 규칙·실내 문답·대화 흐름·총 내림 기습, 포인터 락 일시정지, 시드 결정성) 통과, 콘솔 에러·경고 0건.
+  스크린샷으로 시작·설정·결과·HUD(5분 작전 카운트다운·곡선 구간·대화 메뉴 위치)·색각 보조 무늬·저체력 채도·사망 페이드 확인.
+  실제 게임 치명도(제자리에서 빨간 표식만 쏘는 봇, 무적 아님): 생존·보통 561초 전사 / 600초 생존 / 293초 해임(적과 붙은 아군을 함께 맞힘), 분당 약 7.7명 사살,
+  5분 작전·보통(곡선 1.8배 때) 186~239초 전사 → 곡선 속도를 1.4배로 낮춤. 성능·메모리 수치는 아래 "성능·메모리".
 
 ## 폴더 구조
 
 ```
-index.html            진입점 (import map 으로 three@0.170.0 CDN, HUD/메뉴 DOM)
-css/style.css         UI 스타일
+index.html            진입점 (import map 으로 three@0.170.0 CDN, Google Fonts, HUD/메뉴 DOM — 시작·일시정지·설정·기록·결과·터치 안내)
+css/style.css         UI 스타일 (5단계: 군용 톤 통일, 화면 전환 애니메이션, 결과 화면·타임라인)
+tools/
+  balance-sim.mjs     ★ 5단계 밸런스 시뮬레이션 (Node, 3D 없음 — config 수치 + 확률 모델로 난사형·균형형·신중형 비교)
+tests/                5단계 자동 테스트 (Playwright): lib.mjs(정적 서버·브라우저) / smoke.mjs / rules.mjs / soak.mjs — 산출물 tests/out/ (gitignore)
 js/
-  main.js             엔트리
-  config.js           ★ 모든 튜닝 수치·키 설정 (데미지, 연사, 스폰, 점수, 위협 단계, 조명 등)
+  main.js             엔트리 (터치 전용 기기 안내)
+  config.js           ★ 모든 튜닝 수치·키 설정 (데미지, 연사, 스폰, 점수, 위협 단계, 조명 / 5단계: 난이도 곡선·프리셋·모드·그래픽·믹스·결과)
   core/
     Game.js           렌더러·씬·시스템 연결, 상태 머신(loading/menu/playing/paused/dead/result), 메인 루프
+                      5단계: 난이도·모드(5분 작전 종료), 그래픽 프리셋 적용·첫 실행 자동 추천, 후처리 렌더 경로, 소리 믹스·긴장도, 사망 연출, 결과 객체 조립
     EventBus.js       이벤트 버스 + 이벤트 이름 상수(Events)
-    Input.js          키보드(code)·마우스·포인터 락
-    Settings.js       설정·최고 기록 localStorage
+    Input.js          키보드(code)·마우스·포인터 락 (5단계: 키 설정 반영 rebuildBindings, 키 입력 가로채기 captureNext)
+    Settings.js       설정(감도·음량·접근성·그래픽·난이도·모드·키 설정) + 기록(모드 × 난이도별 최고 기록·최근 10판) localStorage
     Random.js         시드 RNG(mulberry32), gameRand(비결정)
   world/
     World.js          맵 생성 오케스트레이션 + 질의(isIndoors, getIndoorInfo, raycast, hasLineOfSight)
@@ -173,26 +215,30 @@ js/
     Buildings.js      진입 가능 건물(방·계단·창·노드), 진입 불가 건물, 폐허 / LocalFrame(건물 로컬 좌표)
     Props.js          차량·모래주머니·바리케이드·잔해·구덩이·가로등·전선 (반복물은 InstancedMesh)
     GeometryBatcher.js 정적 지오메트리를 (청크×재질)로 병합 + 충돌 삼각형 등록
-    Collision.js      Octree(깊이 제한) + 캡슐 충돌 + 거리 제한 레이캐스트/시야 판정
+    Collision.js      Octree(깊이 제한) + 캡슐 충돌(5단계: 할당 없는 버전) + 거리 제한 레이캐스트/시야 판정 (호출 수 계측)
     NavGraph.js       웨이포인트 그래프 + A*(이진 힙) + 2D 점유 격자
     Materials.js      재질 + 실내 음영 셰이더 패치(patchInterior) + NPC 노란 윤곽(림 라이트 uHighlight)
     Textures.js       CanvasTexture 절차 생성
-    Atmosphere.js     하늘 셰이더·안개·태양(그림자 추적)·불빛 풀·연기 기둥·재·지평선 섬광
+    Atmosphere.js     하늘 셰이더·안개·태양(그림자 추적)·불빛 풀·연기 기둥·재·지평선 섬광 (5단계: 그래픽 품질 setQuality, 창문 불빛 깜박임, dispose)
   fx/
-    Particles.js      인스턴스 빌보드 파티클 (시스템당 드로우콜 1)
+    Particles.js      인스턴스 빌보드 파티클 (시스템당 드로우콜 1) — 5단계: 그래픽 프리셋 방출 비율 FX.particles
     Effects.js        피탄·피·예광탄·탄흔 풀·적 총구 화염·플레이어 총구 섬광 + 떨어지는 숨긴 총(dropRifle)·뜯긴 완장 조각(shreds)
+                      + 5단계: 총구 연기(muzzleSmoke), 근처 탄착 흙먼지(nearImpact)
+    PostFX.js         ★ 5단계 후처리 (HDR 렌더 타깃 → 톤 매핑·색보정·비네트·그레인·저체력 채도/맥동·사망 페이드, FXAA / MSAA)
   audio/AudioSystem.js Web Audio 합성 전부 (총성·발소리·문·잔해·유리·스침·포성·바람·심장박동 + 관찰 집중·장전음 '철컥'·긴장음·테이프 뜯기·무전·알아챔)
+                      + 5단계: 버스 믹스·덕킹(updateMix), 실내/실외 잔향 교차, 먼 교전 층(updateBattle), 긴장 드론(updateMusic), 신호음(습격·암구호·구간), 사망 먹먹함·귀울림
   player/
     Player.js         이동·충돌·시점·흔들림·체력 (관찰 중 이동·감도 감소, 달리기 불가)
     Weapon.js         소총 로직 (발사·탄퍼짐·반동·재장전·정조준, 관찰 중·총 드는 중 사격 불가)
-    WeaponView.js     1인칭 총기 모델·애니메이션 (별도 씬/카메라 패스, 관찰 중 총 내림)
+    WeaponView.js     1인칭 총기 모델·애니메이션 (별도 씬/카메라 패스, 관찰 중 총 내림, 5단계: 탄피 배출·reset)
   npc/
     NPCBase.js        ★ 모든 인물 NPC 공통 베이스 (trueFaction/apparentFaction, 피해·사망 이벤트, 경로 이동, 장비 조회·적대 판정, 행동 기록·관찰 기록, 4단계 대화 자세·화자 라벨)
     HumanoidRig.js    파츠 조립식 인간형 + 절차적 애니메이션 (뼈별 강체 스키닝 SkinnedMesh) — 헬멧·소총·신발·상의·가방 변형, 손 들기·웅크림·짐 들기 자세
+                      + 5단계: 스킨 지오메트리 참조 수 캐시(skinCacheStats), 재질 풀, dispose 때 뼈 텍스처 해제
                       + 3단계 단서 파츠(어깨 패치·허리 불룩·등 총몸·무전기·조끼 끈·전술 장갑)와 자세(손 숨기기·얼어붙음·무전·완장 뜯기·총 꺼내기), 노란 윤곽
                       + 4단계: 부대 패치 별·삼각형, 신분증 소품(setCard), 총구 내림·한 손 늦게·신분증 내밂 자세, 옷 올라감(shirtLift: 허리띠·권총 손잡이)
     Outfits.js        ★ 복장 생성 (soldierOutfit: 진영 장비 세트 / civilianOutfit: 사복 무작위) + describeEquipment (장비 데이터)
-    Insignia.js       ★ 표식 컴포넌트 (색·형태 교체 가능, 헬멧 형태별 띠, 위장용 'tape' 형태, describe())
+    Insignia.js       ★ 표식 컴포넌트 (색·형태 교체 가능, 헬멧 형태별 띠, 위장용 'tape' 형태, describe()) + 5단계: 색각 보조 무늬(setColorblindPatterns), 재질 풀
     Soldier.js        ★ 적·아군 공통 병사 베이스 (지각·대상 선택·조준·점사·탄창·엄폐 주기·NPC 대상 사격)
     EnemySoldier.js   적군 AI 상태 머신 (소총수/돌격병/창문 사수) — 플레이어 우선, 근처 아군도 공격. 위장 프로필이 있으면 정체를 드러낼 때까지 DisguiseController 가 조종
     Disguise.js       ★ 3단계 위장 적: 위장 프로필(rollDisguiseProfile)·위장 복장(disguiseOutfit)·DisguiseController(섞이기·접근·동행·감시·습격 요청·기습 조건·정체 드러내기)
@@ -202,8 +248,10 @@ js/
     AllySquad.js      아군 분대 (목표: 전진·실내 소탕·재집결·교대 이동, 무전 콜아웃, 동행 분리·1인 낙오병 분대)
     CivilianNPC.js    민간인 AI (숨기·엿보기·웅크림·대피·손 들기·공황, 얼어붙음·도움 요청, 대피 지점에서 화면 밖이 되면 퇴장)
     NPCManager.js     생성(spawnEnemy/spawnAllySquad/spawnCivilian/spawnDisguised)·갱신·히트박스 레이캐스트·엄폐/창가 선택·화면 노출 추적·getAimedNPC·진영별/겉보기별 목록·대피 지점·무전 전파
+                      + 5단계: 거리 LOD(animEvery·thinkEvery), 그림자 거리(shadowDist)
   director/
     SpawnDirector.js  ★ 스폰 디렉터 (리듬·출현 지점·예고음·위협 단계, 인구/생성기 등록 구조, 출현 비율 크레딧(진짜/가짜), spawnAppearance, callInAssault)
+                      + 5단계: 난이도 곡선 구간(this.curve)·곡선 시간 기준 위협 단계, CURVE_PHASE
     Populations.js    등록되는 인구: AllyPopulation(증원 분대·교대), CivilianPopulation(초기 배치·등장·대피 유도), AmbushEvent(돌발 조우),
                       DisguisePopulation(위장 적 등장·오판 유도용 진짜 행동 추첨·습격 틈 침투)
   dialogue/
@@ -215,13 +263,17 @@ js/
     Countersign.js    ★ 4단계 암구호·실내 기준수·아군 부대 (교체·작전 무전·인물별 아는 것 knowledgeOf)
   game/
     ScoreSystem.js    점수·콤보·멀티킬·즉응 사살·결과 통계 + 감점(applyPenalty)·콤보 초기화/잠금·어시스트·대피 점수 + 위장 적 식별·근거 있는 판단 보너스
+    Difficulty.js     ★ 5단계 난이도: 곡선 구간 값(sample)·프리셋 배율·모드(곡선 시작·속도)·위협 단계·숙련도 뽑기(rollSkill)
+    RunRecorder.js    ★ 5단계 판 기록: 판단 통계·등급·칭호·결정적 순간·타임라인 데이터 (summarize)
     PenaltySystem.js  ★ 오인 사격 페널티 (감점·콤보 잠금·경고·무전 두절·작전 해임)
     Combat.js         히트스캔 판정 (월드 vs NPC 히트박스, 가까운 쪽)
-    Observation.js    ★ 3단계 관찰 모드 (Q 누르고 있기: 대상 선택·사실 알아채기·거리/조명/각도 제한·메모·노란 윤곽)
+    Observation.js    ★ 3단계 관찰 모드 (Q 누르고 있기: 대상 선택·사실 알아채기·거리/조명/각도 제한·메모·노란 윤곽) — 5단계: 대상 탐색 10Hz, 난이도 관찰 속도, 사용 횟수
   ui/
-    HUD.js            HUD 전체 (3단계: 관찰 화면·게이지·메모, 첫 안내, 정체 드러냄 방향 경고, "위장 적 사살!" / 4단계: 대화 메뉴, 암구호 카드, 첫 말 걸기 안내)
-    Menus.js          시작(작전 브리핑)·일시정지(암구호 카드 설정 포함)·결과 화면
-    DebugOverlay.js   디버그 오버레이 (3단계: 위장 여부·남은 단서·기습 조건 진행 / 4단계: 암구호 상태, 대상이 아는 것, 문답 통계)
+    HUD.js            HUD 전체 (3단계: 관찰 화면·게이지·메모, 첫 안내, 정체 드러냄 방향 경고, "위장 적 사살!" / 4단계: 대화 메뉴, 암구호 카드, 첫 말 걸기 안내
+                      / 5단계: 모드·난이도 표시, 5분 작전 카운트다운, 곡선 구간 표시·배너)
+    Menus.js          시작(모드·난이도·브리핑·키 설정을 따르는 조작법)·일시정지·설정(그래픽·조작·소리·접근성·키)·기록·결과(등급·칭호·통계·순간·타임라인 SVG·최근 기록)
+    DebugOverlay.js   디버그 오버레이 (3단계: 위장 여부·남은 단서·기습 조건 진행 / 4단계: 암구호 상태, 대상이 아는 것, 문답 통계
+                      / 5단계: 갱신·렌더 ms, 드로우콜·삼각형, 지오메트리·텍스처·셰이더, 초당 시야 판정·레이캐스트, LOD, 스킨 캐시, 곡선·긴장도·그래픽)
 ```
 
 ## config 위치
@@ -268,6 +320,26 @@ js/
 - `CONFIG.defaults.countersignCard`(true — 암구호 카드 항상 표시, 일시정지 설정에서 끄면 외워서 플레이), `CONFIG.score.evidence` 는 문답 실패도 근거로 인정
 - 대사 문장은 config 가 아니라 **`js/dialogue/DialogueLines.js`**(쉽게 고칠 수 있게 데이터만 모은 파일)
 
+5단계 추가·변경 (`version: '1.0.0'`):
+- **`CONFIG.curve.phases`** — ★ 난이도 곡선 (시간 구간별, 구간 안에서는 일정 — 첫 구간 경계 전에 위장이 새어 나오지 않게 보간하지 않음).
+  각 구간 `{ at(분), name, note, mix [적, 아군, 민간인], fakeAlly, fakeCiv, skill [숙련0, 1, 2], maxDisguised, decoyAlly, decoyCiv, nearEnemy }`:
+  적응(0분) `78/10/12, 위장 0` → 위장 등장(1분) `68/14/18, 12%/10%, 숙련 [0.85, 0.15, 0], 상한 2` → 혼전(3분) `64/16/20, 20%/17%, [0.45, 0.45, 0.1], 혼전 0.45`
+  → 고강도(6분) `62/16/22, 28%/24%, [0.2, 0.45, 0.35], 상한 3, 혼전 0.6`.
+  **이 곡선이 대체한 4단계까지의 값**: `director.mix`, `director.mixNearEnemyChance`, `disguise.allyChance / civilianChance / maxActive / gearClues`, `disguise.decoy.allyChance / civilianChance`
+  (숙련도 → 장비 단서 수는 **`disguise.gearBySkill`** `[[2,3],[1,1],[0,0]]`). `disguise.fromThreat` 는 이제 참을성·감시 시간 보간(`lerpD`) 시작점으로만 쓴다.
+- **`CONFIG.difficulty`** — 프리셋 `easy / normal / hard`: `enemyAccuracy`(0.72 / 1 / 1.22), `enemyReaction`(1.3 / 1 / 0.8 — 반응 지연 배율), `disguiseMul`(0.7 / 1 / 1.3),
+  `skillMul`(숙련도 가중치 배율 [1.4,0.8,0.35] / [1,1,1] / [0.7,1.1,1.7]), `observeMul`(관찰 간격 0.75 / 1 / 1.3), `card`(어려움 false — 암구호 카드 숨김)
+- **`CONFIG.modes`** — `survival { duration 0, curveStart 0, curveSpeed 1 }`, `timed { duration 300, curveStart 0.5, curveSpeed 1.4 }` (곡선 시간 = 시작 + 경과분 × 속도, 위협 단계 = 1 + 곡선 시간)
+- **`CONFIG.graphics`** — `low / medium / high`: `renderScale`(0.75/1/1), `maxPixelRatio`(1/1/1.5), `shadows`·`shadowMapSize`(끔/1024/2048)·`shadowRange`(30/36/42),
+  `npcShadowDist`(0/22/30), `particles`(0.45/0.75/1), `viewDistance`(240/500/900 — 300 이하면 먼 실루엣·연기 기둥 생략), `post`(끔/켬/켬), `aa`('none'/'fxaa'/'msaa');
+  `autoFps { high 70, medium 42 }` — 첫 실행 메뉴 화면 평균 FPS 로 추천. `CONFIG.render.antialias` 는 false (기본 프레임버퍼 대신 후처리가 AA)
+- **`CONFIG.post`** — 후처리 `vignette 0.32, saturation 1.06, contrast 1.05, tint, lowHpDesat 0.75, grain 0.025`
+- **`CONFIG.audio`** 추가 — `roomReverbSeconds 0.55`(실내 잔향), `mix { amb, ui, music, voice }`, `duck { amb 0.5, music 0.55, sfx 0.12 }`(무전·대사 중 줄이는 비율),
+  `indoorAmbMuffle 1400`(Hz), `distantLayers { far, mid, siren }`(먼 교전 간격 — 위협 단계가 오를수록 짧게), `tension`(긴장 음악: base·perThreat·perEnemy·maxEnemy·assault·focus·lowHp·rise·fall)
+- **`CONFIG.result`** — 등급 경계 `grades [[85,S],[70,A],[55,B],[40,C],[0,D]]`, `kpmFull 4`(분당 사살 4 = 전투 25점), `survivalFull 480`(생존 8분 = 생존 25점), `recentMax 10`
+- **`CONFIG.defaults` / `limits`** — 설정 기본값·범위: `adsSensitivity 0.62`, `sfxVolume`·`voiceVolume`·`musicVolume`, `subtitleSize 'm'`, `colorblind`, `reduceShake`, `graphics null`(자동), `difficulty`, `mode`
+- **`CONFIG.rebindable`** — 키 설정 화면에서 바꿀 수 있는 동작과 표시 이름 (`debug`·Esc 는 고정). 바꾼 키는 Settings 가 `CONFIG.keys` 에 덮어쓴다
+
 ## 핵심 클래스와 역할
 
 - **Game**: 시스템 생성·연결, 상태 전환, 루프. `game.time`(진행 중에만 흐르는 게임 시간), `game.runTime`(이번 판 생존 시간)
@@ -312,7 +384,21 @@ js/
   AllySoldier: 대화 중 멈춤(교전 중이면 싸우며 대답)·사선 회피 중지, `lowerT` 동안 사격 안 함. AllySquad: `unit`. CivilianNPC: `commandHands(sec)`, `dlgEvacuate()`.
   DisguiseController: `talkHalt(reaction)`, `ignoring`, `stopIgnoring()`, `onQuestioned()`, `suspect()`, `startFlee(variant)`, `startFakeEvac()`, `commandHands(hold, lag)`, `onTalkAimed(step)`,
   모드 추가 `flee → hidden → (call | approach)`, `fakeEvac → (stand | approach)`, `suspectT`, `panicAcc`
-- **Game.debugSpawn(kind, o)** (테스트용): 위 "실행·테스트" 참고
+- **Game.debugSpawn(kind, o)** (테스트용): 위 "실행·테스트" 참고 (위장 적 `skill` 을 안 주면 곡선 분포로 뽑음)
+- **Game 5단계**: `difficulty`, `recorder`, `post`, `gfx`/`gfxKey`, `applyGraphics(key, save)`, `applyAudioSettings()`, `applyAccessibility()`, `tension`(0~1), `perf { update, render }`(ms, 지수 평균),
+  `_onTimeUp()`(5분 작전 종료 → `endReason 'complete'`), `_finishRun()` 이 결과 객체 `r` 조립(ScoreSystem.result + 정확도 + PenaltySystem.stats + 관찰·문답 + `recorder.summarize(r)` + mode·difficulty)
+- **Difficulty** (`game.difficulty`, 5단계): `set(preset, mode)`, `preset`/`mode`(config 객체), `presetKey`/`modeKey`, `recordKey`('survival.normal' 등), `curveMinutes(elapsed)`, `threatLevel(elapsed)`,
+  `secondsToNextLevel(elapsed)`, `sample(minutes)` → `cur { index, name, note, mix{enemy,ally,civilian}, fakeAlly, fakeCiv, skill[3], maxDisguised, decoyAlly, decoyCiv, nearEnemy }`(재사용 객체),
+  `rollSkill(rng)`, 배율 `enemyAccuracy`·`enemyReaction`·`observeMul`·`cardAllowed`. 디렉터는 `director.curve`(= sample 결과)를 읽는다
+- **RunRecorder** (`game.recorder`, 5단계): 이벤트 구독(NPC_DAMAGED/KILLED·SCORE_KILL·FRIENDLY_FIRE·DISGUISE_REVEALING/REVEALED·DIALOGUE_ASK/ANSWER·AMBUSH·THREAT_LEVEL·CURVE_PHASE…),
+  `events`(타임라인), `scoreSamples`(2초마다), `update(dt)`, `summarize(r)` → `{ judgmentAccuracy, victimsHit, wrongHits, avgJudgment, preIdRate, disguisedEncountered, ffCount, damageTaken,
+  gradeParts{combat,judgment,identify,survival}, gradeScore, grade, title, titleDesc, moments[{t,clock,text}], timeline{duration, score, events} }`
+- **PostFX** (`game.post`, 5단계): `configure(enabled, aa)`, `target`(렌더 타깃), `resize()`, `setState(lowHp, pulse, dead, time)`, `render()`. 비활성이면 Game 이 화면에 바로 그린다
+- **AudioSystem 5단계**: `setVolumes({master,sfx,voice,music})`, `updateMix({dt, focus, duck, indoor, dead})`, `updateMusic(dt, tension)`, `updateBattle(dt, threat)`, `onDeath(ring)`, `resetRun()`,
+  신호음 `assaultCue()`·`countersignCue()`·`phaseCue()`, `nearImpact(pos)`, `distantGunfire(pan, near)`·`distantSiren(pan)`. 버스: `sfx`·`amb`(→ 실내 저역 통과)·`ui`·`voice`·`music`
+- **Settings / Records** (5단계): `bindKey(action, code)`(맞바꾼 동작 반환)·`resetKeys()`·`applyKeys()`, `keyLabel(code)` / `Records.board(key)`, `submit(result, key)` → 갱신 항목 `{first, score, kills, time, combo, grade}`, `recent`(최근 10판)
+- **NPC LOD** (5단계): `npc.animEvery`(1~3 — 애니메이션 프레임 간격), `npc.thinkEvery`(1~2 — AI 간격, 화면 밖 45m+), 누적 dt 로 실행. `npcs.shadowDist`, `npcs.lodStats`
+- **Insignia 5단계**: `setColorblindPatterns(on)` — 살아 있는 모든 표식 재질의 `uPattern`(0 없음 / 1 X / 2 세로 줄무늬, 색으로 결정 — 테이프도 파랑이라 줄무늬)
 - **PenaltySystem**: `warnings`, `allyHits/allyKills/civHits/civKills`, `stats()`, `reset()`
 - **VoiceSystem** (`game.voice`): `say({speaker, text, channel, priority, voice, force, duration})`, `mute(channel, sec)`, `isMuted`, `muteRemaining`, `setSpeech(on)`, `clear()`, `history`
 - **NPC 공통 조회**: `npc.getEquipment()` → `{ faction(겉보기), headwear, helmetStyle, weapon, rifleStyle, magazine, footwear, footwearClass, vest, top, bag, elder, insignia:{visible,color,colorName,shape,tape}, hands,
@@ -349,6 +435,8 @@ js/
 4단계 추가: `DIALOGUE_OPEN {npc, indoor, first, firstIndoor}`, `DIALOGUE_ASK {npc, question, number}`, `DIALOGUE_ANSWER {npc, outcome, fail}`(통계·테스트용 — 화면엔 판정 없음),
 `DIALOGUE_CLOSE {npc, reason}`, `COUNTERSIGN_CHANGED {current, previous, indoorBase, prevIndoorBase, initial}`. `DISGUISE_REVEALING/REVEALED` 의 reason 에 `'questioned'`(문답에 막혀 드러냄) 추가.
 위장 적의 `NPC_DAMAGED/KILLED` 는 `trueFaction: 'enemy'`, `apparentFaction: 'ally'|'civilian'`(드러내기 전) 으로 나간다 — 오인 사격 페널티 없음.
+5단계 추가: `CURVE_PHASE {index, name, note}`(난이도 곡선 구간 변경 — HUD 배너·신호음·타임라인), `NEAR_IMPACT {point, distance}`(빗나간 적 탄이 3.2m 안에 맞음 — 흔들림),
+`RUN_END {reason: 'killed'|'dismissed'|'complete'}`(판이 끝나는 순간 — 결과 화면은 2.4~3.4초 뒤 `GAME_STATE {state:'result', result}`).
 
 ## 3단계 단서 목록과 판정 규칙
 
@@ -507,14 +595,18 @@ E (game.dialogue.tryOpen)
   ① `Responses.QUESTIONS` 에 항목 → ② `respond()` 의 진짜/위장 분기에 대본 → ③ `DialogueLines.DLINES` 에 대사 → ④ 필요하면 NPC 행동 메서드 + `Clues.BEHAVIOR` 기록 순서로 추가한다.
 - 판정을 화면에 띄우지 않는 원칙: 대답 결과는 `DIALOGUE_ANSWER` 이벤트·`npc.dialogueFailed`·통계에만. 관찰 메모에는 '머뭇거림·거부·도주' 같은 행동만 남는다.
 
-### 5단계 — 다듬기 (연결 지점)
-- **난이도 곡선**: `CONFIG.threat`(적 수·명중률·반응·우회·웨이브·간격·유형) + `CONFIG.disguise`(위장 비율·상한·장비 단서 수·기습 조건·정찰) + `CONFIG.dialogue`
-  (숙련도별 반응 확률, 질문 압박, 도주·기습 가속, 실내 기준수 추측 확률)를 함께 조절. 위장 숙련도 분포는 `disguise.gearClues`(장비 단서 수 → 숙련도)로 정해진다.
-  암구호 교체 주기는 지금 위협 단계(`threat.secondsPerLevel`)에 묶여 있다 — 따로 두려면 `CountersignSystem` 에 타이머를 추가.
-- **결과 화면 개편**: `Game._finishRun` 이 모으는 결과 객체 `r`(ScoreSystem.result + 정확도 + PenaltySystem.stats + 관찰 + 문답 통계 `dialogue*`)를 `Menus.showResult` 가 행 목록으로 그린다.
-  판단 통계는 `NPC_DAMAGED/KILLED`(`timeSinceFirstSeen`, `apparentFaction`), `FRIENDLY_FIRE`, `DISGUISE_*`, `OBSERVE_FACT`, `DIALOGUE_*` 이벤트를 구독해 더 만들 수 있다.
-- **연출·사운드**: 전부 `audio/AudioSystem.js` 합성. 대화는 TTS(설정) 외엔 효과음이 없다 — 플레이어 외침·무전 교체음 등을 추가할 자리는 `DialogueSystem._sayPlayer`, `CountersignSystem.update`.
-- **최적화**: NPC 1명 = 드로우콜 2(몸·표식) + 신분증을 보일 때 1. 업데이트 비용은 디버그 오버레이 `ms` 와 위 성능 측정 방법 참고. 실기기 FPS 측정이 남아 있다.
+### 5단계 — 완료 (v1.0)
+- 난이도는 `game/Difficulty.js` 가 곡선(`config.curve`) × 프리셋(`config.difficulty`) × 모드(`config.modes`)를 합쳐 `director.curve` 로 내보내고, 디렉터·인구·위장 프로필이 그 값을 읽는다.
+  새 '시간에 따라 바뀌는 값'은 `curve.phases` 에 필드를 추가하고 `Difficulty.sample` 에서 복사한 뒤 읽는 곳에서 `director.curve.필드` 로 쓴다.
+- 결과 화면은 `RunRecorder.summarize(r)` 가 계산하고 `Menus.showResult` 가 그린다. 새 판단 통계는 RunRecorder 에 이벤트 구독을 추가해 `summarize` 결과에 넣는다.
+  등급 공식은 `RunRecorder._gradeParts`, 칭호 규칙은 `_title`, 결정적 순간 후보·흥미 점수는 `_moments`.
+- 소리는 버스(`sfx`·`amb`·`ui`·`voice`·`music`)로 나뉜다 — 새 소리는 성격에 맞는 버스로 연결하면 설정 음량·덕킹이 자동 적용된다.
+
+### 앞으로 (아이디어 — 이번 판에는 넣지 않음)
+- 실기기 프로파일링(GPU 시간 측정)과 그에 맞춘 그래픽 프리셋 경계값(`graphics.autoFps`) 조정
+- 사람 플레이 데이터로 밸런스 보정: 시뮬레이션의 스타일 모수(`tools/balance-sim.mjs` `STYLES`·`ENEMY`)를 실제 반응 시간·명중 분포로 교체
+- 대화 상대 여러 명(분대 전체에 묻기), 플레이어 외침 음성(합성 음성 대신 짧은 효과음), 결과 화면 공유(이미지 저장), 일일 시드 도전 모드
+- 위장 적 행동 기록을 '플레이어가 실제로 본 것'만 남기기 (지금은 그 인물에게 일어난 일 전부)
 
 ## 임의로 정한 설계 결정
 
@@ -644,6 +736,41 @@ E (game.dialogue.tryOpen)
 64. **화자 라벨은 겉모습뿐**: 대화·외침 자막은 `[파란 표식 병사]`/`[민간인]`(진짜·가짜 공통), 플레이어는 `[나]`, 암구호 교체는 `[작전 무전]`. 분대 무전 `[아군 무전 · 알파]` 는 진짜 분대만 쓰므로 유지.
 65. **대화와 관찰은 독립**: 관찰 모드(총 내림)와 대화(총 듦)를 동시에 할 수 있다 — 서로 막지 않고, 대화 상대에게 관찰도 그대로 된다.
 66. **암구호 카드 숨김 = 난이도 옵션**: 카드를 끄면 작전 무전으로 들은 단어를 기억해야 한다. 질문할 때 문어는 자동으로 외치므로 기억할 건 답어와 기준수.
+
+### 5단계 설계 결정
+
+67. **난이도 곡선은 '구간 계단'**: 시간 구간마다 값이 일정하고 경계에서 바뀐다(보간하지 않음). 선형 보간하면 0.5분에 위장 적이 새어 나와 '첫 1분 위장 없음'이 깨지기 때문.
+    적의 수·명중률·반응·습격 규모는 기존 위협 단계(1분마다 1단계 보간)가 그대로 맡고, 곡선은 '누가 나오나'(출현 비율·위장·숙련도·혼전·오판 유도 행동)만 맡는다.
+68. **숙련도 → 장비 단서 수** (3·4단계와 방향을 뒤집음): 예전엔 장비 단서 수를 위협 단계로 뽑고 숙련도를 거기서 정했지만, 이제 곡선의 숙련도 분포에서 숙련도를 먼저 뽑고
+    장비 단서 수(2~3 / 1 / 0)를 정한다 — "6분 뒤 완벽 위장 35%" 같은 설계 의도를 숫자로 바로 적을 수 있게.
+69. **5분 작전 = 같은 규칙, 빠른 곡선**: 곡선이 0.5분에서 시작해 1.4배로 흐름(5분 = 곡선 7.5분, 위협 8단계). 1.8배일 때는 실제 게임 봇이 186~239초에 모두 전사해 '버티면 완료'가 거의 불가능했다.
+    시간이 다 되면 상태 `dead`(사유 `complete`)로 2.6초 연출 뒤 결과 — 전사·해임과 같은 흐름을 재사용.
+70. **난이도 프리셋은 배율만**: 곡선·위협 단계 수치를 바꾸지 않고 적 명중률·반응·위장 비율·숙련도 가중치·관찰 간격에 곱한다(어려움은 암구호 카드도 숨김 — 설정에서 다시 켤 수 없음).
+    기록은 모드 × 난이도별로 따로(비교가 공정하게). 해임된 판의 생존 시간은 여전히 기록에 넣지 않는다.
+71. **등급 = 네 항목 25점씩**: 점수만으로 매기면 생존 시간이 긴 판이 무조건 유리하고 판단 품질이 드러나지 않아, 전투(분당 사살 4 = 만점)·판단(정확도 60~100% → 0~25, 경고마다 −5)·
+    식별(사전 식별률, 위장 적을 못 만났으면 12.5)·생존(생존 8분 / 5분 작전 완수 = 만점)으로 나눴다. 작전 해임은 항목과 무관하게 D.
+72. **판단 정확도 = 내 총에 맞은 '사람' 기준**: 총알 수가 아니라 처음 맞힌 순간 한 사람으로 센다(난사 한 번에 여러 발이 맞아도 판단은 하나). 위장 적은 진짜 적으로 친다.
+    '평균 판단 시간'은 화면에 처음 보인 뒤 첫 명중까지(적만) — 사격 버튼을 누른 시각은 기록하지 않아 첫 명중으로 대신했다.
+73. **사전 식별률의 분모** = 사전 식별 사살 + 스스로 정체를 드러내기 시작한 위장 적(기습·습격 요청·궁지) + 먼저 쏘거나 문답으로 몰아붙였지만 다 드러내게 둔 위장 적.
+    한 번도 마주치지 않고 사라진 위장 적은 세지 않는다.
+74. **결정적 순간은 흥미 점수 상위 3개를 시간 순**: 문답으로 가려낸 위장 적(92) > 관찰로 가려냄(88) > 오인 사살(80) > 그냥 식별(72) > 기습 반격·돌발 조우 즉응(66·64) > 멀티킬 > 기습당함 …,
+    사건이 적은 판은 '처음 보인 지 n초 만에 사살'·'먼 거리 사살'·'구간 진입'·'첫 사살'이 채운다. 같은 종류(문장 앞부분)가 겹치지 않게.
+75. **소리 우선순위 = 덕킹**: 무전·대사 자막이 떠 있는 동안 환경음 −50%·음악 −55%·효과음 −12% (부드럽게 들어가고 천천히 돌아옴). 관찰 집중(4단계)도 같은 믹스 함수 안에서 계산.
+    실내에선 바깥 환경음(바람·먼 교전)을 1.4kHz 아래로 먹먹하게 하고 잔향을 짧은 방 잔향 쪽으로 교차한다.
+76. **긴장 음악은 드론 + 맥동**: 멜로디 없이 낮은 톱니파 두 개(조금 어긋난 음정) + 5도 + 잡음 바닥을 저역 통과로 열고 닫는다. 긴장도 0.45 를 넘으면 북소리처럼 맥동(56→110bpm),
+    0.55 를 넘으면 높은 떨림. 긴장도 = 기본 0.12 + 위협 단계 + 30m 안 교전 중인 적(최대 +0.35) + 습격 +0.22 + 관찰·대화 +0.18 + 저체력 +0.2, 오를 땐 1.6초·내릴 땐 6초에 걸쳐.
+77. **후처리는 한 패스**: HDR 렌더 타깃에 월드와 1인칭 총을 그린 뒤 전체 화면 삼각형 하나로 톤 매핑(ACES)·색보정·비네트·그레인·저체력·사망을 처리. 렌더 타깃에 그릴 땐 three 가
+    톤 매핑을 하지 않으므로 이 패스의 셰이더가 한다. 기본 프레임버퍼 멀티샘플은 끄고(`render.antialias false`) 중간은 FXAA, 높음은 4× MSAA 렌더 타깃. 낮음은 후처리 없이 바로 그린다.
+78. **그래픽 자동 추천은 메뉴에서 조용히**: 셰이더 준비 1.2초 뒤 3초 동안 메뉴 비행 장면의 실제 프레임 시간을 재서(델타 상한 전 값) 70fps↑ 높음 / 42fps↑ 중간 / 그 밖 낮음.
+    사용자가 고르면 다시 재지 않는다. `?gfx=` 로 강제할 수 있다(테스트·스크린샷).
+79. **색각 보조 무늬는 표식 셰이더에**: 표식 원통의 uv(둘레 방향을 '칸 수'만큼 늘림)로 X 무늬·세로 줄무늬를 그린다(추가 메시 없음). 무늬는 색에서 정하므로 위장 적의 파란 표식·테이프도
+    아군 무늬를 그대로 흉내 낸다 — 색을 대신할 뿐, 판단을 대신해 주지 않는다. 표식 재질은 몸 재질과 셰이더가 달라 프로그램 캐시 키를 따로 둔다.
+80. **NPC 메모리**: 스킨 지오메트리는 복장 키별 참조 수로 공유하고, 아무도 안 쓰는 것은 최근 24개만 남긴다(군복처럼 자주 다시 쓰는 것을 매번 다시 만들지 않게). 재질은 인물마다 유니폼이 달라
+    공유할 수 없어서 풀에 돌려 쓴다(최대 64). 이렇게 하면 모든 인물이 사라져도(재시작) 셰이더 프로그램이 해제되지 않아 다음 판 첫 등장 때 재컴파일 끊김이 없다.
+81. **LOD 는 '보이는지'와 거리로**: 40m 안이거나 화면에 보이는 55m 안 인물은 매 프레임 애니메이션, 화면 밖 40m+ 는 3프레임, 보이지만 55m+ 는 2프레임마다(누적 dt).
+    AI 는 화면 밖 45m+ 일 때만 2프레임마다(대화 상대 제외). 지오메트리 LOD(먼 인물의 단순한 모델)는 NPC 하나가 2천 정점 남짓이라 이득이 작아 넣지 않았다.
+82. **밸런스 시뮬레이션은 '상대 비교용'**: 3D·AI 를 흉내 내지 않고 config 수치와 확률 모델로 스타일 간 차이를 본다. 적이 사선을 잡기까지의 시간·엄폐 보정은 실제 게임 봇의 치명도
+    (생존·보통 약 8~10분, 분당 7~10명)에 대략 맞췄고, 절대 점수는 실제보다 높게 나온다(시뮬레이션의 적은 숨지 않고 계속 보이므로).
 
 ### 기대 점수 분석 (오인 사격 수치 근거)
 
