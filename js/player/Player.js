@@ -34,6 +34,8 @@ export class Player {
     this.landDip = 0;
     this.shake = 0;
     this.speed = 0;
+    this.moveHeading = 0; // v1.1: 수평 이동 방향 / 같은 방향으로 꾸준히 움직인 시간 (적의 예측 사격)
+    this.moveSteadyT = 0;
     this.eye = new THREE.Vector3();
     this.lastSafe = new THREE.Vector3();
     this.deathT = 0;
@@ -69,6 +71,7 @@ export class Player {
     // 5단계: 재시작 시 이동·흔들림 상태도 완전히 초기화
     this.sprinting = false;
     this.speed = 0;
+    this.moveSteadyT = 0;
     this.bobPhase = 0;
     this.bobAmount = 0;
     this.landDip = 0;
@@ -136,7 +139,8 @@ export class Player {
 
     // 반동 복귀 (연사 중엔 천천히, 멈추면 빠르게)
     const firing = weapon && weapon.timeSinceShot < 0.15;
-    const rec = CONFIG.weapon.recoil.recovery * (firing ? 0.45 : 1);
+    const RC = CONFIG.weapon.recoil;
+    const rec = RC.recovery * (firing ? RC.firingRecoveryMul : 1);
     const k = Math.min(1, rec * dt);
     this.recoilPitch -= this.recoilPitch * k;
     this.recoilYaw -= this.recoilYaw * k;
@@ -224,6 +228,14 @@ export class Player {
     // --- 시점 흔들림·발소리 ---
     const hs = Math.hypot(this.velocity.x, this.velocity.z);
     this.speed = hs;
+    // v1.1 적의 예측 사격용: 같은 방향으로 꾸준히 움직인 시간 (방향을 꺾거나 멈추면 0 — 지그재그는 예측을 깬다)
+    if (hs > 1) {
+      const head = Math.atan2(this.velocity.x, this.velocity.z);
+      const turn = Math.abs(Math.atan2(Math.sin(head - this.moveHeading), Math.cos(head - this.moveHeading)));
+      if (turn > THREE.MathUtils.degToRad(CONFIG.npc.aim.lead.turnDeg) * Math.max(dt * 6, 0.2)) this.moveSteadyT = 0;
+      else this.moveSteadyT += dt;
+      this.moveHeading = head;
+    } else this.moveSteadyT = 0;
     if (this.onFloor && hs > 0.5) {
       const prev = this.bobPhase;
       this.bobPhase += (hs * dt) / P.bob.stepLength * Math.PI;

@@ -13,6 +13,10 @@
 //   · 적 사격: 유형별 명중률 × 위협 단계 배율 × 난이도 배율 × 거리·이동·엄폐 보정, 등장 유예·반응 지연, 점사 속도, 유형별 피해
 //   · 위장 적: 섞이기·접근 뒤 참을성(disguise.ambush.patience) 만큼 지나면 기습 — 예고 동작 중에 쏘면 막음
 //   · 점수: config.score(사살·헤드샷·즉응·멀티킬·콤보·위장 적 식별·근거) / 오인 사격: config.penalty(총알마다 감점, 사살 시 경고·콤보 잠금)
+//   · v1.1: 적 조준(npc.aim) — 전체 배율(enemyMul × 난이도 aimBoost), 조준 수렴(플레이어가 멈춰 있는 동안 start → max, 움직이면 초기화),
+//     예측 사격(움직이는 플레이어의 이동 감점 일부 상쇄), 점사 속도(유형별 burst·burstPause 로 계산)
+//     플레이어: 스타일마다 움직이는 시간 비율(moveFrac) · 허리 사격 비율(hipFrac — 무기 퍼짐·반동 강화로 사살 시간 증가),
+//     적의 조준 회피(npc.evade — 오래 겨누면 숨거나 비켜서 사살이 늦어짐)
 import { CONFIG } from '../js/config.js';
 
 // ---------------------------------------------------------------------
@@ -68,6 +72,9 @@ export const STYLES = {
     reactTelegraph: 0.85, // 정체를 드러내는 예고 동작 중에 쏴서 막을 확률
     crossfire: 0, // (전부 쏘므로 따로 없음)
     exposure: 1.0, // 받는 피해 배율 (확인·문답에 쓰는 시간 동안 덜 움직이고 노출됨)
+    moveFrac: 0.55, // v1.1: 움직이는 시간 비율 (적의 조준 수렴을 끊음 — 대신 움직이며 쏘면 허리 사격)
+    moveSeg: 1.1, // 움직임/멈춤 한 구간 평균 길이(초)
+    hipFrac: 0.85, // 허리 사격·이동 사격 비율 (실측: 허리 연사는 사살당 발사 +35%)
   },
   balanced: {
     label: '균형형',
@@ -86,6 +93,9 @@ export const STYLES = {
     reactTelegraph: 0.45,
     crossfire: 0.05, // 적과 붙어 나온 아군·민간인이 탄퍼짐에 맞을 확률
     exposure: 1.0,
+    moveFrac: 0.45, // 점사 사이에 옆으로 움직임
+    moveSeg: 1.0,
+    hipFrac: 0.2, // 가까운 적만 허리 사격, 나머지는 정조준 점사
   },
   careful: {
     label: '신중형',
@@ -101,12 +111,29 @@ export const STYLES = {
     reactTelegraph: 0.6,
     crossfire: 0.03,
     exposure: 1.08, // 말 거는 동안 멈춰 서 있어 조금 더 맞음
+    moveFrac: 0.25, // 말 걸고 관찰하느라 오래 멈춰 섬 (적의 조준이 수렴)
+    moveSeg: 1.4,
+    hipFrac: 0.1,
   },
 };
 
-// 적 사격 모델 보정 (게임 실측 대략치): 평균 교전 거리·플레이어 이동·엄폐 활용·사선 확보 비율
-// approach: 생성 뒤 사선이 트이기까지(초) — 실제 게임에서 제자리 봇이 분당 7~10명 사살하는 수준에 맞춤
-const ENEMY = { distFactor: 0.62, playerCover: 0.4, shotsPerSec: 2.6, ambushShots: [3, 6], hotAcc: 0.55, approach: [5, 22] };
+// 적 사격 모델 보정 (게임 실측 대략치): 평균 교전 거리·플레이어 엄폐 활용·사선 확보 비율
+// approach: 생성 뒤 사선이 트이기까지(초) — 실제 게임 봇의 분당 사살·생존 시간에 맞춤 (CLAUDE.md "밸런스 시뮬레이션")
+// fireDuty: 적이 실제로 쏘는 시간 비율(엄폐에서 내밀기·이동 포함) — v1.0 보정값(초당 2.6발)을 유형별 점사 속도로 바꾼 뒤의 배율
+// moveSpeedFrac: 움직이는 플레이어의 평균 속도/전력질주 속도 (이동 감점), leadAvg: 예측 사격이 걸리는 평균 정도 (방향을 자주 바꿈)
+const ENEMY = { distFactor: 0.62, playerCover: 0.4, fireDuty: 1.0, ambushShots: [3, 6], hotAcc: 0.55, approach: [4, 17], moveSpeedFrac: 0.55, leadAvg: 0.4 };
+// v1.1 무기 다루기(퍼짐·반동 강화): 실제 게임 봇 실측 — 허리 연사 사살당 발사 +34%, 정조준 점사는 변화 없음
+const HIP_TTK_MUL = 1.4;
+// 적의 조준 회피로 늦어지는 시간 (숨었다 다시 내밀 때까지)
+const EVADE_DELAY = [0.6, 1.5];
+
+// 유형별 초당 발사 수 (점사 발수 / (점사 시간 + 점사 간격))
+function fireRate(type) {
+  const c = CONFIG.npc.types[type];
+  const burst = (c.burst[0] + c.burst[1]) / 2;
+  const pause = (c.burstPause[0] + c.burstPause[1]) / 2;
+  return burst / (burst * CONFIG.npc.shotInterval * 1.05 + pause);
+}
 
 // ---------------------------------------------------------------------
 // 한 판
@@ -168,12 +195,24 @@ export function simulateRun(styleKey, { mode = 'survival', difficulty = 'normal'
     return 2;
   };
 
+  // v1.1 적 조준: 전체 배율(쉬움은 강화 폭 절반) · 수렴 범위
+  const AIM = CONFIG.npc.aim;
+  const boost = P.aimBoost ?? 1;
+  const aimMul = 1 + (AIM.enemyMul - 1) * boost;
+  const convStart = 1 - (1 - AIM.converge.start) * boost;
+  const convMax = 1 + (AIM.converge.max - 1) * boost;
   const enemyStats = (type) => {
     const c = CONFIG.npc.types[type];
-    const acc = c.accuracy * lerpT(T.accuracyMul, threat) * P.enemyAccuracy;
+    const acc = c.accuracy * lerpT(T.accuracyMul, threat) * P.enemyAccuracy * aimMul;
     const react = lerpRangeT(T.reactionDelay, threat).map((v) => v * P.enemyReaction);
-    return { acc, react: R.range(react[0], react[1]), dmg: CONFIG.npc.hitDamage[type] || 8 };
+    return { acc, react: R.range(react[0], react[1]), dmg: CONFIG.npc.hitDamage[type] || 8, rate: fireRate(type), conv: 0 };
   };
+  // 무기 다루기 강화 폭 (쉬움 handling.spreadMul 0.75 → 절반)
+  const handlingFrac = Math.max(0, Math.min(1, ((P.handling ? P.handling.spreadMul : 1) - 0.5) / 0.5));
+  const hipMul = 1 + (HIP_TTK_MUL - 1) * handlingFrac;
+  // 플레이어 움직임 (구간마다 움직임/멈춤 — 움직이면 적의 조준 수렴이 끊김)
+  let moving = R.chance(S.moveFrac);
+  let moveT = R.range(0.3, 1) * S.moveSeg;
 
   const spawn = (kind, o = {}) => {
     const p = { id: nextId++, kind, spawnAt: t, gone: false, handled: !!o.known, ...o };
@@ -304,7 +343,11 @@ export function simulateRun(styleKey, { mode = 'survival', difficulty = 'normal'
       reds.sort((a, b) => a.visibleAt - b.visibleAt);
       const p = reds[0];
       const cover = p.type === 'rifleman' || p.type === 'window' ? R.range(0, 1.2) : 0; // 엄폐 뒤에서 고개를 내밀 때까지
-      return { kind: 'kill', p, until: t + R.range(...S.acquire) + R.range(...S.checkRed) + R.range(...S.ttk) + cover };
+      // v1.1: 허리 사격이면 사살이 늦어지고(퍼짐·반동), 오래 겨누면 적이 숨거나 비켜섬
+      let ttk = R.range(...S.ttk) * (R.chance(S.hipFrac) ? hipMul : 1);
+      const E = CONFIG.npc.evade;
+      if (ttk > (E.aimTime[0] + E.aimTime[1]) / 2 && R.chance(E.chance * 0.6)) ttk += R.range(...EVADE_DELAY);
+      return { kind: 'kill', p, until: t + R.range(...S.acquire) + R.range(...S.checkRed) + ttk + cover };
     }
     // 2) 아직 판단하지 않은 파란 표식·사복
     const others = vis.filter((p) => !p.handled && (p.kind === 'ally' || p.kind === 'civ' || (p.kind === 'fake' && !p.revealed)));
@@ -375,7 +418,7 @@ export function simulateRun(styleKey, { mode = 'survival', difficulty = 'normal'
     }
     st.ambushed++;
     const shots = R.int(...ENEMY.ambushShots);
-    for (let i = 0; i < shots; i++) if (R.chance(ENEMY.hotAcc * P.enemyAccuracy)) damagePlayer(p.dmg * 1.0);
+    for (let i = 0; i < shots; i++) if (R.chance(Math.min(AIM.max, ENEMY.hotAcc * P.enemyAccuracy * aimMul))) damagePlayer(p.dmg * 1.0);
     p.visibleAt = t; // 이제 빨간 표식 적
     p.shootFrom = t + 0.4;
   };
@@ -529,14 +572,26 @@ export function simulateRun(styleKey, { mode = 'survival', difficulty = 'normal'
       }
     }
 
-    // 적 사격 → 플레이어 피해
+    // 플레이어 움직임 구간 (말 걸기·확인 중엔 멈춰 섬)
+    moveT -= dt;
+    if (moveT <= 0) {
+      moving = R.chance(S.moveFrac);
+      moveT = R.range(0.5, 1.5) * S.moveSeg;
+    }
+    const still = !moving || (player.task && (player.task.kind === 'question' || player.task.kind === 'checked'));
+    // 적 사격 → 플레이어 피해 (v1.1: 수렴 — 멈춰 있으면 쌓이고 움직이면 초기화 / 움직이면 이동 감점 − 예측 사격)
+    const C = AIM.converge;
+    const moveMul = 1 - CONFIG.npc.accuracy.moveFactor * ENEMY.moveSpeedFrac * (1 - AIM.lead.comp * boost * ENEMY.leadAvg);
     for (const p of people) {
       if (p.gone) continue;
       const red = p.kind === 'enemy' || (p.kind === 'fake' && p.revealed);
       if (!red || t < p.shootFrom) continue;
+      if (still) p.conv = (p.conv || 0) + dt;
+      else p.conv = 0;
+      const conv = convStart + (convMax - convStart) * Math.min(1, (p.conv || 0) / C.time);
       const ramp = Math.min(1, (t - p.shootFrom) / CONFIG.npc.graceRamp);
-      const hc = Math.min(CONFIG.npc.accuracy.max, p.acc * ENEMY.distFactor * ENEMY.playerCover * (0.25 + 0.75 * ramp)) * S.exposure;
-      const expected = ENEMY.shotsPerSec * dt * hc;
+      const hc = Math.min(AIM.max, p.acc * ENEMY.distFactor * ENEMY.playerCover * (0.25 + 0.75 * ramp) * conv * (still ? 1 : moveMul)) * S.exposure;
+      const expected = (p.rate || 2.6) * ENEMY.fireDuty * dt * hc;
       if (R.chance(expected)) damagePlayer(p.dmg);
     }
     // 회복

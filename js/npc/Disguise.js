@@ -937,8 +937,9 @@ export class DisguiseController {
       n.goalNode = this.post.id;
       n.coverPhase = 'peek';
       n.phaseT = R.range(2, 3.5);
-      n._setState('post');
-    } else n._enterEngage();
+      n._enterCoverSpot(n.position.x, n.position.y, n.position.z);
+      n._setState('post', '정체 드러냄 — 창가에서 사격');
+    } else n._enterEngage('정체 드러냄 → 교전');
     g.events.emit(Events.DISGUISE_REVEALED, { npc: n, as: p.as, role: p.role, reason: p.revealReason, ambush: p.revealReason !== 'damaged' });
   }
 

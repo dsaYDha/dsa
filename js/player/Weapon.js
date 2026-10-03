@@ -1,5 +1,8 @@
 // 돌격소총 로직 — 히트스캔 연사, 탄창 30발, 재장전(중 사격 불가), 정조준, 반동, 탄퍼짐
 // 3단계: 관찰 모드 중(총을 내림)과 다시 드는 0.3초 동안은 사격·정조준 불가
+// v1.1: 맞히기 어렵게 — 허리 사격·이동·점프 퍼짐 확대, 연사 퍼짐(bloom)이 연사 중엔 회복되지 않고 쌓임,
+//       연사할수록 세로 반동이 커지고(growth) 좌우로 흔들림(sway). 정조준 + 정지 + 짧은 점사만 정확
+//       난이도 프리셋 handling 이 퍼짐·반동 증가 폭을 줄일 수 있음 (쉬움 = 절반 안팎)
 import * as THREE from 'three';
 import { CONFIG } from '../config.js';
 import { Events } from '../core/EventBus.js';
@@ -9,6 +12,7 @@ const _dir = new THREE.Vector3();
 const _right = new THREE.Vector3();
 const _up = new THREE.Vector3();
 const _muzzle = new THREE.Vector3();
+const HANDLING_NONE = { spreadMul: 1, bloomMul: 1, recoilGrowthMul: 1, swayMul: 1 };
 
 export class Weapon {
   constructor(game) {
@@ -29,6 +33,14 @@ export class Weapon {
     this.timeSinceShot = 99;
     this.shotsFired = 0;
     this.shotsHit = 0;
+    this.sprayN = 0; // 지금 연사의 몇 번째 발인지 (쉬는 동안 recoil.sprayDecay 만큼 줄어듦)
+    this.swayPhase = 0;
+  }
+
+  // 난이도 프리셋의 무기 다루기 배율 (쉬움은 퍼짐·반동 증가가 절반 안팎)
+  get handling() {
+    const d = this.game.difficulty;
+    return d ? d.handling : HANDLING_NONE;
   }
 
   get reloadProgress() {
@@ -47,7 +59,9 @@ export class Weapon {
     const cfg = this.cfg;
     const game = this.game;
     this.timeSinceShot += dt;
-    this.cooldown = Math.max(-this.interval, this.cooldown - dt);
+    // 연사 중엔 프레임 경계로 잃는 시간을 다음 발로 넘기되(최대 한 발), 방아쇠를 놓고 있으면 쌓지 않음
+    // (v1.1 수정: 예전엔 쉬는 동안 한 발 분량이 쌓여 클릭할 때마다 같은 프레임에 두 발이 나갔음)
+    this.cooldown = Math.max(input.isFire() ? -this.interval : 0, this.cooldown - dt);
 
     const down = game.observation && game.observation.weaponDown;
     // 정조준
@@ -82,19 +96,20 @@ export class Weapon {
       }
     }
 
-    // 탄퍼짐 회복
-    this.bloom = Math.max(0, this.bloom - cfg.spread.bloomRecovery * dt);
+    // 탄퍼짐 회복 — 마지막 발사 뒤 bloomDelay 가 지나야 (연사 중엔 쌓이기만 한다)
+    if (this.timeSinceShot > cfg.spread.bloomDelay) this.bloom = Math.max(0, this.bloom - cfg.spread.bloomRecovery * dt);
   }
 
   // 현재 탄퍼짐 (도) — 크로스헤어 크기에도 사용
   currentSpread(player) {
     const S = this.cfg.spread;
+    const k = this.handling.spreadMul;
     const a = this.adsT;
-    let s = S.hip + (S.ads - S.hip) * a;
+    let s = S.hip * k + (S.ads - S.hip * k) * a;
     const moveFrac = Math.min(1, player.speed / CONFIG.player.walkSpeed);
-    s += S.move * moveFrac * (1 - a * 0.75);
-    if (player.sprinting) s += S.sprint;
-    if (!player.onFloor) s += S.air;
+    s += S.move * k * moveFrac * (1 - a * (1 - S.adsMoveMul));
+    if (player.sprinting) s += S.sprint * k;
+    if (!player.onFloor) s += S.air * k;
     if (player.crouching) s *= S.crouchMul;
     s += this.bloom * (1 - a * (1 - S.adsBloomMul));
     return s;
@@ -105,14 +120,19 @@ export class Weapon {
     const game = this.game;
     this.ammo--;
     this.shotsFired++;
+    // 연사 발수 — 쉬는 만큼(연사 간격을 넘는 시간) 줄어든다: 끊어 쏘면 반동이 쌓이지 않고, 길게 당기면 계속 커짐
+    const gap = Math.max(0, this.timeSinceShot - this.interval * 1.15);
+    this.sprayN = Math.max(0, this.sprayN - gap * cfg.recoil.sprayDecay);
+    if (this.sprayN < 1) this.swayPhase = R.range(0, Math.PI * 2);
+    this.sprayN += 1;
     this.timeSinceShot = 0;
 
-    // 탄퍼짐 원뿔 안 무작위 방향 (가운데로 몰리는 분포)
+    // 탄퍼짐 원뿔 안 무작위 방향 — centerBias 만큼 가운데로 몰림 (0 이면 원 안 균등)
     const spread = THREE.MathUtils.degToRad(this.currentSpread(player));
     player.getAimDirection(_dir);
     _right.set(1, 0, 0).applyQuaternion(game.camera.quaternion);
     _up.set(0, 1, 0).applyQuaternion(game.camera.quaternion);
-    const r = Math.tan(spread) * Math.sqrt(R.next()) * (0.55 + 0.45 * R.next());
+    const r = Math.tan(spread) * Math.sqrt(R.next()) * (1 - cfg.spread.centerBias * R.next());
     const a = R.next() * Math.PI * 2;
     _dir.addScaledVector(_right, Math.cos(a) * r).addScaledVector(_up, Math.sin(a) * r).normalize();
 
@@ -120,11 +140,16 @@ export class Weapon {
     const result = game.combat.playerShot(origin, _dir.clone());
     if (result.npc) this.shotsHit++;
 
-    // 반동
+    // 반동 — 연사할수록 세로 반동이 커지고(growth), swayFrom 발부터 좌우로 흔들림(sway, 점점 커짐)
     const rc = cfg.recoil;
+    const h = this.handling;
     const mul = (1 - this.adsT * (1 - rc.adsMul)) * (player.crouching ? rc.crouchMul : 1);
-    player.addRecoil(rc.pitch * mul * R.range(0.85, 1.15), rc.yaw * mul * R.range(-1, 1));
-    this.bloom = Math.min(cfg.spread.bloomMax, this.bloom + cfg.spread.bloomPerShot);
+    const n = Math.min(Math.max(0, this.sprayN - 1), rc.sprayCap);
+    const pitch = rc.pitch * (1 + rc.growth * h.recoilGrowthMul * n);
+    const swayK = Math.min(1, Math.max(0, (this.sprayN - rc.swayFrom + 1) / 4));
+    const sway = rc.sway * h.swayMul * swayK * Math.sin(this.sprayN * 0.85 + this.swayPhase);
+    player.addRecoil(pitch * mul * R.range(0.85, 1.15), (rc.yaw * R.range(-1, 1) + sway) * mul);
+    this.bloom = Math.min(cfg.spread.bloomMax, this.bloom + cfg.spread.bloomPerShot * h.bloomMul);
 
     // 연출
     game.audio.playerGunshot();

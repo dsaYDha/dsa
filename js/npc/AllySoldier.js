@@ -1,7 +1,8 @@
 // 아군 — 파란 표식. 적과 거의 같은 군복 + 아군 장비 세트(낮은 헬멧·직선 탄창 소총)
 // 보조 역할: 낮은 명중률로 제압 사격, 적 처치의 주인공은 플레이어. 적만 공격 (trueFaction 기준)
 // 분대(AllySquad)의 지시로 엄폐 지점을 따라 전진·실내 소탕·재집결
-// 사선 회피: 플레이어 조준선 앞을 오래 막지 않도록 앉거나 비킴 (교전 중엔 가끔 가로지름)
+// 사선 회피: 플레이어 조준선 앞을 오래 막지 않도록 옆으로 비킴 (교전 중엔 가끔 가로지름) — v1.1: 앉아서 피하던 동작은 없앰
+// v1.1 엄폐 규칙: 위협 = 가장 가까운 빨간 표식. 유효한 엄폐(Soldier._evalCover)에서만 웅크리고, 무효면 서서 경계하다 가까운 유효 엄폐로
 // 3단계: 겉보기 적(빨간 표식)만 공격 — 위장 적에게 속는다. 오판 유도용 진짜 행동:
 //   동행(escort, 플레이어 3~5m 뒤에서 엄호 — 실제로 적과 싸움), 낙오병(join, 다가와 합류), 무전 콜아웃에 반응(돌아봄)
 //   행동 기록은 위장 적과 같은 기준(npc/Behaviors.js)
@@ -42,7 +43,7 @@ export class AllySoldier extends Soldier {
     this.clearSeq = null;
     this.clearIdx = 0;
     this.pauseT = 0;
-    this.duckT = 0;
+    this.relocT = R.range(0.5, 2);
     this.blockT = 0;
     this.lineCheckT = R.range(0, 0.2);
     this.lineCooldown = 0;
@@ -78,6 +79,20 @@ export class AllySoldier extends Soldier {
     return near.slice(0, 3).map((x) => x.e);
   }
 
+  // v1.1 위협 = 가장 가까운 빨간 표식 (시야 거리 안) — 엄폐 판정 기준
+  threatEye(out) {
+    let best = null;
+    let bd = this.sightRange * this.sightRange;
+    for (const e of this.game.npcs.byApparent('enemy')) {
+      const d = e.position.distanceToSquared(this.position);
+      if (d < bd) {
+        bd = d;
+        best = e;
+      }
+    }
+    return best ? best.getEyePosition(out) : null;
+  }
+
   rollDamage() {
     const A = CONFIG.ally;
     const zone = R.chance(A.headChance) ? 'head' : R.weighted({ torso: 0.6, arm: 0.2, leg: 0.2 });
@@ -95,12 +110,12 @@ export class AllySoldier extends Soldier {
   // ------------------------------------------------------------------
   // 분대 지시
   // ------------------------------------------------------------------
-  orderMove(nodeId, kind) {
+  orderMove(nodeId, kind, reason = null) {
     this.clearSeq = null;
     if (kind !== 'cover') this._releaseCover();
     this.orderKind = kind;
-    const ok = this._goTo(nodeId, kind, true);
-    if (!ok) this._setState(S.HOLD);
+    const ok = this._goTo(nodeId, kind, true, reason || `분대 지시: ${kind}`);
+    if (!ok) this._setState(S.HOLD, '이동 경로 없음 → 대기');
     return ok;
   }
 
@@ -191,7 +206,7 @@ export class AllySoldier extends Soldier {
     if (this._engagedNow()) {
       this.curSpeed = 0;
       this.aimTarget = 1;
-      this.crouchTarget = this.duckT > 0 ? 1 : 0;
+      this.crouchTarget = 0;
       return;
     }
     const t = escortTarget(g, this, 4.2, this.escortSide);
@@ -204,7 +219,7 @@ export class AllySoldier extends Soldier {
     if (arrived) {
       this.targetYaw = yawOfPlayerForward(g);
       this.aimTarget = 0.6;
-      this.crouchTarget = this.duckT > 0 ? 1 : 0.15;
+      this.crouchTarget = 0.15;
     }
     if (this.position.distanceTo(g.player.feet) < 9) this.noteBehavior('escorting');
   }
@@ -276,7 +291,7 @@ export class AllySoldier extends Soldier {
   // ------------------------------------------------------------------
   think(dt) {
     this._tickPerception(dt);
-    this.duckT = Math.max(0, this.duckT - dt);
+    this.relocT -= dt;
     this.lineCooldown = Math.max(0, this.lineCooldown - dt);
     this.lookT = Math.max(0, this.lookT - dt);
     // 행동 기록 (위장 적과 같은 기준)
@@ -297,6 +312,19 @@ export class AllySoldier extends Soldier {
       this.faceTowards(this.game.player.feet.x, this.game.player.feet.z);
       this.aimTarget = 0.3;
       this.crouchTarget = Math.min(this.crouchTarget, 0.3);
+    } else if (this.hopT > 0) {
+      // 조준선에서 옆으로 한 걸음 (끝나면 하던 일로)
+      this.hopT -= dt;
+      const dx = this.hopTo.x - this.position.x;
+      const dz = this.hopTo.z - this.position.z;
+      const d = Math.hypot(dx, dz);
+      const stepLen = Math.min(d, 3.6 * dt);
+      if (d > 1e-3) {
+        this.position.x += (dx / d) * stepLen;
+        this.position.z += (dz / d) * stepLen;
+      }
+      this.curSpeed = d > 0.02 ? 3.6 : 0;
+      this.crouchTarget = 0;
     } else switch (this.state) {
       case S.ENTER:
         if (this.stateT > 0.6) this._setState(S.HOLD);
@@ -328,7 +356,10 @@ export class AllySoldier extends Soldier {
     if (this.lowerT > 0) this.aimTarget = 0;
     if (!talking) this._aimAtTarget(this.curSpeed < 0.1);
     if (!talking && this.lowerT <= 0) this._sightLine(dt); // 말을 거는 중엔 조준선 위에 있는 게 당연하므로 비키지 않음
+    // 교전 중 이동은 지그재그·불규칙한 속도 (v1.1)
+    this.weave = this.state === S.MOVE && engaged ? CONFIG.npc.cover.zigzag.amp * 0.8 : 0;
     this._shooting(dt);
+    this._enforceCrouch();
     if (this.withdrawing) this._checkLeave(dt);
   }
 
@@ -338,45 +369,68 @@ export class AllySoldier extends Soldier {
     if (!done) return;
     this.curSpeed = 0;
     if (this.goalKind === 'cover' && this.coverNode) {
+      const n = this.coverNode;
+      this._enterCoverSpot(n.x, n.y, n.z);
       this.coverPhase = 'hide';
       this.phaseT = R.range(0.4, 1.2);
-      if (this.coverNode.coverDir) this.targetYaw = Math.atan2(this.coverNode.coverDir.x, this.coverNode.coverDir.z);
-      this._setState(S.COVER);
+      if (n.coverDir) this.targetYaw = Math.atan2(n.coverDir.x, n.coverDir.z);
+      this._setState(S.COVER, '엄폐 지점 도착');
     } else if (this.goalKind === 'clear') {
       this.pauseT = R.range(0.8, 1.6);
       this.targetYaw += R.range(-1.2, 1.2);
-      this._setState(S.CLEAR);
+      this._setState(S.CLEAR, '실내 소탕');
     } else {
-      this._setState(S.HOLD);
+      this._setState(S.HOLD, '자리 도착');
     }
   }
 
+  // 엄폐: 적이 보이거나 최근에 봤으면 숨기↔일어나(옆으로 내밀어) 사격, 아니면 숨은 채 경계 —
+  // v1.1: 가장 가까운 적에 대해 유효한 엄폐일 때만 웅크림. 무효(적이 측면·엄폐가 안 막음)면 서서 경계하다 가까운 유효 엄폐로
   _cover(dt) {
-    // 적이 보이거나 최근에 봤으면 숨기↔일어나 사격, 아니면 웅크린 채 경계
-    if (this.target && this.aware && this.game.time - this.lastLOST < 6) {
-      this._coverCycle(dt, [2.0, 3.6], [1.0, 2.4]);
-      if (this.duckT > 0) {
+    const engaged = this.target && this.aware && this.game.time - this.lastLOST < 6;
+    const ev = this._evalCover();
+    if (!engaged || !ev.valid) {
+      this._applyLean(dt, 0, 0);
+      if (ev.valid) {
+        // 적이 안 보이면 숨은 채 경계 (유효한 엄폐니까 웅크려도 됨)
         this.crouchTarget = 1;
-        this.aimTarget = 0;
+        this.aimTarget = 0.3;
+        this.coverPhase = 'hide';
+        return;
       }
-    } else {
-      this.crouchTarget = 1;
-      this.aimTarget = 0.3;
+      // 무효: 서서 경계·사격 — 웅크려도 보이는 자리(측면)면 가까운 유효 엄폐로 (가려졌지만 적이 안 보이는 자리는 그대로)
+      this.crouchTarget = 0;
+      this.aimTarget = engaged ? 1 : 0.5;
+      if (!ev.noThreat && !ev.protected) this._relocate(engaged ? '교전 중 측면 노출 → 다른 엄폐로' : '엄폐가 가장 가까운 적을 못 막음 → 다른 엄폐로');
+      return;
     }
+    this._coverCycle(dt, [2.0, 3.6], [1.0, 2.4]);
   }
 
+  // 근처(15m)의 유효 엄폐로 옮김 (2.5초에 한 번만 시도)
+  _relocate(reason) {
+    if (this.relocT > 0) return;
+    this.relocT = 2.5;
+    const node = this.game.npcs.findCover(this, { maxDist: CONFIG.npc.cover.nearRadius, range: [6, 55], anyNode: true });
+    if (!node) return;
+    this._releaseCover();
+    node.reservedBy = this;
+    this.coverNode = node;
+    this.orderMove(node.id, 'cover', reason);
+  }
+
+  // 대기: 교전 중이면 서서 사격, 아니면 무릎만 살짝 굽혀 경계 (v1.1: 뚫린 곳에서 반쯤 웅크리던 자세 없앰)
   _hold() {
     const engaged = this.target && this.aware && this.game.time - this.lastLOST < 4;
     this.aimTarget = engaged ? 1 : 0.4;
-    this.crouchTarget = this.duckT > 0 ? 1 : engaged ? 0 : 0.5;
+    this.crouchTarget = engaged ? 0 : 0.15;
   }
 
   _canShoot() {
     if (!super._canShoot()) return false;
     if (this.lowerT > 0) return false; // "총 내려!"에 따름
-    if (this.curSpeed > 0.4) return false; // 이동 중엔 쏘지 않음
-    if (this.duckT > 0) return false;
-    if (this.state === S.COVER && this.coverPhase !== 'peek') return false;
+    if (this.curSpeed > 0.4 && !(this.inCoverSpot && this.lean.lengthSq() > 0.04)) return false; // 이동 중엔 쏘지 않음 (몸을 내밀어 쏘는 건 예외)
+    if (this.state === S.COVER && this.coverPhase !== 'peek' && this.coverOK) return false;
     return this.state === S.COVER || this.state === S.HOLD || this.state === S.CLEAR || this.state === S.ESCORT || this.state === S.JOIN;
   }
 
@@ -411,7 +465,6 @@ export class AllySoldier extends Soldier {
       if (!this._playerFiring() || this.gapWaitT <= 0 || (now.t > 1 && now.lat < L.width + 0.2)) this.gapWaitT = 0;
       else {
         this.curSpeed = 0;
-        this.crouchTarget = 0.6;
         return true;
       }
     }
@@ -481,41 +534,69 @@ export class AllySoldier extends Soldier {
     this.lineCooldown = L.cooldown;
     const firing = this.burstLeft > 0 || (this.aim > 0.6 && this.hasLOS);
     if (!playerFiring && firing && R.chance(L.crossChance)) return; // 교전 중엔 가끔 그대로 사선에 머묾 (긴장 요소)
-    // 조준선이 앉은 머리보다 높게 지나가면 앉아서 피하고, 낮게 지나가면(플레이어가 앉아 쏘는 중 등) 옆으로 비킴
-    const lineH = this._aimLineRel(_c.x, _c.y, _c.z, _rel).h;
+    // v1.1: 앉아서 피하던 동작을 없애고 옆으로 비킴 (뚫린 곳에서 웅크리지 않게) — 동행 중이면 반대편 옆으로
     if (this.isEscorting) {
       this._escortDodge();
-      if (lineH > 1.4) this.duckT = 1.2;
       return;
     }
-    if (lineH > 1.4 && this.crouch < 0.5 && this.duckT <= 0) {
-      this.duckT = 2.5;
-      if (this.squad && R.chance(0.25)) this.squad.callout(this, line('allySightLine'));
-    } else {
-      // 이미 앉았는데도 막고 있으면 옆 노드로 비킴
-      const node = this._sideStepNode(cam.position, _f);
-      if (node != null) this.orderMove(node, this.orderKind === 'cover' ? 'hold' : this.orderKind || 'hold');
-    }
+    // 먼저 그 자리 옆으로 한 걸음 재빨리, 그럴 수 없으면 옆 노드로 비킴
+    const hopped = this._hopAside(cam.position, _f);
+    const node = hopped ? null : this._sideStepNode(cam.position, _f);
+    if (node != null) this.orderMove(node, this.orderKind === 'cover' ? 'hold' : this.orderKind || 'hold', '사선 위 → 옆으로 비킴');
+    if (hopped) this.stateReason = '사선 위 → 옆으로 한 걸음';
+    if ((hopped || node != null) && this.squad && R.chance(0.25)) this.squad.callout(this, line('allySightLine'));
   }
 
+  // 조준선에서 비켜설 노드 — 가까운 곳(5m)에 없으면 더 넓게(9m), 그래도 없으면 조금 덜 비켜도 되는 곳 (v1.1: 웅크려 피하던 동작 대신이라 꼭 찾게)
   _sideStepNode(camPos, fwd) {
     const nav = this.game.world.nav;
-    const cand = nav.inRadius(this.position.x, this.position.y, this.position.z, 5, (n) => n.id !== this.navNode && Math.abs(n.y - this.position.y) < 1);
-    let best = null;
-    let bestScore = -Infinity;
-    for (const n of cand) {
-      _v.set(n.x - camPos.x, n.y + 1.2 - camPos.y, n.z - camPos.z);
-      const t = _v.dot(fwd);
-      const lat = t > 0 ? _v.addScaledVector(fwd, -t).length() : 99;
-      if (lat < 1.6) continue;
-      if (Math.hypot(n.x - camPos.x, n.z - camPos.z) < 2.2) continue; // 플레이어 바로 옆은 제외
-      const score = -Math.hypot(n.x - this.position.x, n.z - this.position.z) + Math.min(lat, 4);
-      if (score > bestScore) {
-        bestScore = score;
-        best = n.id;
+    for (const [radius, minLat] of [[5, 1.6], [9, 1.6], [9, 1.15]]) {
+      const cand = nav.inRadius(this.position.x, this.position.y, this.position.z, radius, (n) => n.id !== this.navNode && Math.abs(n.y - this.position.y) < 1);
+      let best = null;
+      let bestScore = -Infinity;
+      for (const n of cand) {
+        _v.set(n.x - camPos.x, n.y + 1.2 - camPos.y, n.z - camPos.z);
+        const t = _v.dot(fwd);
+        const lat = t > 0 ? _v.addScaledVector(fwd, -t).length() : 99;
+        if (lat < minLat) continue;
+        if (Math.hypot(n.x - camPos.x, n.z - camPos.z) < 2.2) continue; // 플레이어 바로 옆은 제외
+        const score = -Math.hypot(n.x - this.position.x, n.z - this.position.z) + Math.min(lat, 4);
+        if (score > bestScore) {
+          bestScore = score;
+          best = n.id;
+        }
       }
+      if (best != null && nav.findPath(this.navNode, best, { maxIter: 600 })) return best;
     }
-    return best;
+    return null;
+  }
+
+  // 조준선에서 그 자리 옆으로 한 걸음(0.95m) 재빨리 — 웅크려 피하던 동작 대신 (0.3초 안에 선 밖으로).
+  // 비어 있는 쪽(점유 격자·충돌)으로만. 성공하면 true
+  _hopAside(camPos, fwd) {
+    const world = this.game.world;
+    let rx = -fwd.z;
+    let rz = fwd.x;
+    const rl = Math.hypot(rx, rz) || 1;
+    rx /= rl;
+    rz /= rl;
+    const side = Math.sign((this.position.x - camPos.x) * rx + (this.position.z - camPos.z) * rz) || R.sign();
+    for (const sg of [side, -side]) {
+      const tx = this.position.x + rx * sg * 0.95;
+      const tz = this.position.z + rz * sg * 0.95;
+      if (world.occupancy && !world.isIndoors(this.position) && !world.occupancy.isFree(tx, tz)) continue;
+      _v.set(this.position.x, this.position.y + 0.9, this.position.z);
+      _c.set(tx, this.position.y + 0.9, tz);
+      if (world.collision.segmentBlocked(_v, _c) || world.collision.segmentBlocked(_c, _v)) continue;
+      this._leaveCoverSpot();
+      this._releaseCover();
+      this.hopTo = this.hopTo || new THREE.Vector3();
+      this.hopTo.set(tx, this.position.y, tz);
+      this.hopT = 0.35;
+      if (this.state === S.COVER) this._setState(S.HOLD, '사선 위 → 옆으로 한 걸음');
+      return true;
+    }
+    return false;
   }
 
   // ------------------------------------------------------------------
@@ -528,10 +609,7 @@ export class AllySoldier extends Soldier {
   }
 
   onSuppressed() {
-    if (this.state === S.COVER && this.coverPhase === 'peek' && R.chance(0.4)) {
-      this.coverPhase = 'hide';
-      this.phaseT = R.range(1.0, 2.0);
-    }
+    if (this.state === S.COVER && this.coverPhase === 'peek' && R.chance(0.4)) this._hideNow([1.0, 2.0]);
   }
 
   onDamaged(info) {
@@ -542,14 +620,16 @@ export class AllySoldier extends Soldier {
       this.game.camera.getWorldDirection(_f);
       if (this.isEscorting) {
         this._escortDodge();
-        this.duckT = 1.2;
+        return;
+      }
+      // 옆으로 비킴 — 그 자리 옆으로 한 걸음, 안 되면 옆 노드로 (v1.1: 웅크리지 않음)
+      this.lineCooldown = CONFIG.ally.sightLine.cooldown;
+      if (this._hopAside(this.game.camera.position, _f)) {
+        this.stateReason = '오인 사격 → 옆으로 한 걸음';
         return;
       }
       const node = this.curSpeed < 0.5 ? this._sideStepNode(this.game.camera.position, _f) : null;
-      if (node != null) {
-        this.lineCooldown = CONFIG.ally.sightLine.cooldown;
-        this.orderMove(node, this.orderKind === 'cover' || this.orderKind === 'clear' ? 'hold' : this.orderKind || 'hold');
-      } else this.duckT = 1.5;
+      if (node != null) this.orderMove(node, this.orderKind === 'cover' || this.orderKind === 'clear' ? 'hold' : this.orderKind || 'hold', '오인 사격 → 옆으로 비킴');
       return;
     }
     if (att && att.position) {
@@ -557,10 +637,8 @@ export class AllySoldier extends Soldier {
       this.aware = true;
       if (!this.hasLOS) this.target = att;
     }
-    if (this.state === S.COVER) {
-      this.coverPhase = 'hide';
-      this.phaseT = R.range(1.2, 2.2);
-    }
+    // 엄폐 중이면 숨음 (엄폐가 무효면 _coverCycle·_enforceCrouch 가 웅크리지 않게 막고 다른 엄폐로 옮김)
+    if (this.state === S.COVER) this._hideNow([1.2, 2.2]);
     if (this.squad && R.chance(0.4)) this.squad.callout(this, line('allyHurt'));
   }
 
